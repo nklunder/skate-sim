@@ -23,8 +23,8 @@
   - **Flics Outward** (away from toes, behind the body plane) = **Kickflip**.
   - **Flices Inward** (toward toes, in front of the body plane) = **Heelflip**.
 - **Scoop & Shove-it Symmetry:** The skateboard kicks directly in the physical direction of your thumbstick scoop (scooping Left swings left, scooping Right swings right).
-  - **Quarter-Turn Sweep ($35^\circ \to 110^\circ$ arc span):** Triggers a **$180^\circ$ Pop Shove-it** (or Varial Flip).
-  - **Half-Turn Sweep ($\ge 110^\circ$ arc span):** Triggers a **$360^\circ$ Pop Shove-it** (or 360 Flip / Tre Flip, Laser Flip).
+  - **Moderate Sweep ($35^\circ \to 80^\circ$ arc span):** Triggers a **$180^\circ$ Pop Shove-it** (or Varial Flip).
+  - **Deep Scoop / Quarter-Turn Sweep ($\ge 80^\circ$ arc span):** Triggers a **$360^\circ$ Pop Shove-it** (or 360 Flip / Tre Flip, Laser Flip).
 - **Analog Trigger Body Rotation:** L and R trigger pulls spin the skater in mid-air. An **audio-log power taper curve ($y = \text{sign}(x) \cdot |x|^{2.2}$)** desensitizes light-to-mid squeezes for subtle styling adjustments while scaling exponentially to 100% spin velocity (`554 deg/s`) for explosive flat-ground 360s!
 
 ---
@@ -38,7 +38,7 @@
 - **Touchdown Tolerances:**
   - **Manual Catch Zone:** Landing within $\pm 15^\circ$ pitch while holding middle stick zone ($0.20 \to 0.90$) bypasses entry delays for instant, silky manual rollouts.
   - **Sideways Landing Window ($\pm 45^\circ$):** Touching down within $\pm 45^\circ$ of straight ($0^\circ/180^\circ$) snaps to orientation. Landing sideways perpendicular to travel direction ($45^\circ \to 135^\circ$ or $225^\circ \to 315^\circ$) fires a `"BAIL! (Sideways Landing / Wheel Skid)"` speed crash!
-- **80% Simulation Speed Calibration:** Cruising max speed is calibrated to `5.6 m/s` ($\approx 12.5\text{ mph}$) with `2.0 m/s` foot pushes and `608 deg/s` flip rotation speeds for readable, floaty trick execution.
+- **Simulation Speed Calibration:** Cruising max speed is calibrated to `7.0 m/s` ($\approx 15.7\text{ mph}$) with `2.0 m/s` foot pushes and `608 deg/s` flip rotation speeds for readable, floaty trick execution.
 
 ### 2. `res://scripts/input/FootInputState.gd` (Input Classification & Trick Nomenclature)
 - **Stance Tracking:** Dynamically evaluates `leading_foot` and `trailing_foot` using travel velocity dot product when moving, or static SkaterController forward orientation (`-pivot.get_parent().global_transform.basis.z`) when stationary. This ensures 100% accurate switch foot recognition even when standing completely still!
@@ -71,6 +71,8 @@
 - [x] **Trigger Physics & Precision Landings:** Calibrated body rotation speed (`554 deg/s` for flat-ground 360s), audio-log trigger sensitivity curve (exponent `2.2`), 80% pre-wind turning suppression during pop loading, fluid angular momentum smoothing, and $\pm 45^\circ$ sideways landing bail tolerances.
 - [x] **Advanced Shove-its & Gameplay Pace:** Integrated dynamic arc span tracking for Quarter-Turn ($180^\circ$) vs. Half-Turn ($360^\circ$) Shove-its, automatic Tre Flip / Laser Flip recognition, and global 80% simulation speed calibration.
 - [x] **Switch Stance & Manual Inversion Resolution:** Solved stationary switch stance reversal by testing against static forward vectors at zero velocity, and applied Euler rotation angle inversion for all Switch/Fakie manuals, pops, and flips.
+- [x] **Top Speed Calibration Update:** Adjusted cruising max speed (`max_push_speed`) from `5.6 m/s` to `7.0 m/s` ($\approx 15.7\text{ mph}$) and exported motion physics parameters in `SkaterController.gd`.
+- [x] **Shove-it Scoop Sensitivity Refinement:** Lowered the 360 Shove-it / Tre Flip trigger threshold from `110°` down to `80°` for more effortless quarter-turn sweeps, and exported both `shuv_180_threshold_deg` and `shuv_360_threshold_deg` in `FootInputState.gd`.
 
 ---
 

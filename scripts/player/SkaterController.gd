@@ -35,12 +35,12 @@ var is_flip_in_progress: bool = false
 @onready var ray_bl: RayCast3D = $BoardPivot/RayCastBL
 @onready var ray_br: RayCast3D = $BoardPivot/RayCastBR
 
-# Motion & Push Physics
+@export_category("Motion & Push Physics")
+@export var max_push_speed: float = 7.0
+@export var push_impulse: float = 2.0
+@export var rolling_friction: float = 1.0
 var velocity: Vector3 = Vector3.ZERO
 var current_speed: float = 0.0
-var max_push_speed: float = 5.6
-var push_impulse: float = 2.0
-var rolling_friction: float = 1.0
 
 # Foot Push Animation State (Elevated to Y = 0.055 to prevent board collisions)
 var left_foot_rest: Vector3 = Vector3(0, 0.055, -0.25)

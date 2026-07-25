@@ -7,6 +7,10 @@ enum PopState { NONE, LOADING_OLLIE, LOADING_NOLLIE, POPPED }
 @export var stance: Stance = Stance.REGULAR
 @export var board_config: SkateBoardConfig
 
+@export_category("Shove-it Scoop Thresholds")
+@export var shuv_180_threshold_deg: float = 35.0
+@export var shuv_360_threshold_deg: float = 80.0
+
 # Live Input Values
 var left_stick_raw: Vector2 = Vector2.ZERO
 var right_stick_raw: Vector2 = Vector2.ZERO
@@ -195,8 +199,8 @@ func _evaluate_flip_combo() -> void:
 	elif Input.is_physical_key_pressed(KEY_X) or Input.is_physical_key_pressed(KEY_G):
 		active_flip_type = "Heelflip"
 		
-	var is_360_shuv: bool = (max_swept_angle >= 110.0 or Input.is_physical_key_pressed(KEY_H))
-	if is_360_shuv or (max_swept_angle >= 35.0 or (scoop_stick.length() >= 0.35 and absf(scoop_stick.x) >= 0.35) or Input.is_physical_key_pressed(KEY_C)):
+	var is_360_shuv: bool = (max_swept_angle >= shuv_360_threshold_deg or Input.is_physical_key_pressed(KEY_H))
+	if is_360_shuv or (max_swept_angle >= shuv_180_threshold_deg or (scoop_stick.length() >= 0.35 and absf(scoop_stick.x) >= 0.35) or Input.is_physical_key_pressed(KEY_C)):
 		var scoop_is_left_foot: bool = not flick_is_left_foot
 		var is_frontside: bool = false
 		if not Input.is_physical_key_pressed(KEY_C) and not Input.is_physical_key_pressed(KEY_H):
