@@ -1,4 +1,4 @@
-[gd_scene load_steps=11 format=3]
+[gd_scene load_steps=12 format=3]
 
 [ext_resource type="Script" path="res://scripts/player/SkaterController.gd" id="1_controller"]
 [ext_resource type="Script" path="res://scripts/input/FootInputState.gd" id="2_input"]
@@ -6,7 +6,12 @@
 [ext_resource type="Script" path="res://scripts/player/SkateDeckMesh.gd" id="4_deck_mesh"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_foot"]
-size = Vector3(0.26, 0.05, 0.12)
+size = Vector3(0.20, 0.05, 0.12)
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_toe"]
+top_radius = 0.06
+bottom_radius = 0.06
+height = 0.05
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_foot_l"]
 albedo_color = Color(0.2, 0.6, 0.9, 1)
@@ -15,9 +20,9 @@ albedo_color = Color(0.2, 0.6, 0.9, 1)
 albedo_color = Color(0.9, 0.3, 0.3, 1)
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_peg"]
-top_radius = 0.015
-bottom_radius = 0.015
-height = 0.22
+top_radius = 0.022
+bottom_radius = 0.022
+height = 0.16
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_peg"]
 albedo_color = Color(0.95, 0.95, 0.15, 1)
@@ -40,11 +45,16 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.055, -0.25)
 mesh = SubResource("BoxMesh_foot")
 surface_material_override/0 = SubResource("StandardMaterial3D_foot_l")
 
+[node name="ToeTip" type="MeshInstance3D" parent="BoardPivot/LeftFoot"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.10, 0, 0)
+mesh = SubResource("CylinderMesh_toe")
+surface_material_override/0 = SubResource("StandardMaterial3D_foot_l")
+
 [node name="PegPivot" type="Node3D" parent="BoardPivot/LeftFoot"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.07, 0.025, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.09, 0.025, 0)
 
 [node name="AnklePeg" type="MeshInstance3D" parent="BoardPivot/LeftFoot/PegPivot"]
-transform = Transform3D(1, 0, 0, 0, -4.37114e-08, -1, 0, 1, -4.37114e-08, 0, 0, -0.11)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.08, 0)
 mesh = SubResource("CylinderMesh_peg")
 surface_material_override/0 = SubResource("StandardMaterial3D_peg")
 
@@ -53,11 +63,16 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.055, 0.25)
 mesh = SubResource("BoxMesh_foot")
 surface_material_override/0 = SubResource("StandardMaterial3D_foot_r")
 
+[node name="ToeTip" type="MeshInstance3D" parent="BoardPivot/RightFoot"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.10, 0, 0)
+mesh = SubResource("CylinderMesh_toe")
+surface_material_override/0 = SubResource("StandardMaterial3D_foot_r")
+
 [node name="PegPivot" type="Node3D" parent="BoardPivot/RightFoot"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.07, 0.025, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.09, 0.025, 0)
 
 [node name="AnklePeg" type="MeshInstance3D" parent="BoardPivot/RightFoot/PegPivot"]
-transform = Transform3D(1, 0, 0, 0, -4.37114e-08, -1, 0, 1, -4.37114e-08, 0, 0, -0.11)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.08, 0)
 mesh = SubResource("CylinderMesh_peg")
 surface_material_override/0 = SubResource("StandardMaterial3D_peg")
 

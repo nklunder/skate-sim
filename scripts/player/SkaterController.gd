@@ -15,9 +15,10 @@ var vertical_velocity: float = 0.0
 @export_category("Flip & Spin Physics (3-Layer Hierarchy)")
 @export var flip_speed_deg: float = 760.0
 @export var spin_speed_deg: float = 540.0
-@export var body_spin_speed_deg: float = 240.0
+@export var body_spin_speed_deg: float = 554.0
 var target_board_roll: float = 0.0
 var target_board_yaw: float = 0.0
+var current_aerial_spin_rate: float = 0.0
 var is_flip_in_progress: bool = false
 
 @onready var input_state: FootInputState = $FootInputState
@@ -61,20 +62,29 @@ func _physics_process(delta: float) -> void:
 	_animate_foot_push_stroke(delta)
 	input_state.update_stance_facts(board_pivot, left_foot, right_foot, velocity)
 	
-	# 2. Push Acceleration Impulses via Face Buttons (only on ground)
-	if is_grounded and (input_state.push_left_triggered or input_state.push_right_triggered):
-		current_speed = minf(current_speed + push_impulse, max_push_speed)
-		if input_state.push_left_triggered:
-			_start_foot_push("left")
-		else:
-			_start_foot_push("right")
+	# 2. Push Acceleration Impulses via Face Buttons (latched inputs ensure zero missed taps)
+	if input_state.push_left_triggered or input_state.push_right_triggered:
+		if is_grounded:
+			current_speed = minf(current_speed + push_impulse, max_push_speed)
+			if input_state.push_left_triggered:
+				_start_foot_push("left")
+			else:
+				_start_foot_push("right")
+			input_state.push_left_triggered = false
+			input_state.push_right_triggered = false
+		elif vertical_velocity > 0.5 or global_position.y > 0.60:
+			# Clear stale latched presses if high in the air to prevent unintended touchdown bursts
+			input_state.push_left_triggered = false
+			input_state.push_right_triggered = false
 	
 	# 3. Rolling Resistance / Deceleration when rolling on pavement
 	if is_grounded:
 		current_speed = maxf(0.0, current_speed - rolling_friction * delta)
 	
 	# 4. Steering & Stationary Rotation via Trigger Lean (RT - LT) on pavement
-	var turn_rate: float = input_state.lean * (input_state.board_config.turn_speed if is_instance_valid(input_state.board_config) else 3.0)
+	# Dampen steering by 80% while preparing pop to safely pre-wind aerial spin without swerving off line!
+	var turn_mult: float = 0.2 if input_state.current_pop_state != FootInputState.PopState.NONE else 1.0
+	var turn_rate: float = input_state.lean * (input_state.board_config.turn_speed if is_instance_valid(input_state.board_config) else 3.0) * turn_mult
 	if is_grounded and abs(input_state.lean) > 0.05:
 		rotate_y(-turn_rate * delta)
 	
@@ -85,23 +95,25 @@ func _physics_process(delta: float) -> void:
 		input_state.pop_impulse_triggered = false
 		
 		# Initial kicktail pitch angle upon popping
-		if input_state.last_pop_type.begins_with("Ollie"):
-			board_pivot.rotation_degrees.x = 22.0
+		if input_state.last_pop_type.contains("Nollie") or input_state.last_pop_type.contains("Fakie"):
+			board_pivot.rotation_degrees.x = -22.0 # Leading nose pop
 		else:
-			board_pivot.rotation_degrees.x = -22.0
+			board_pivot.rotation_degrees.x = 22.0 # Trailing tail pop
 			
-		# Configure BoardMesh flip & spin targets (Layer 3)
+		# Configure BoardMesh flip & spin targets (Layer 3) with reverse roll direction for Nollie/Fakie flips!
+		var roll_sign: float = -1.0 if (input_state.last_pop_type.contains("Nollie") or input_state.last_pop_type.contains("Fakie")) else 1.0
 		if input_state.active_flip_type == "Kickflip":
-			target_board_roll = board_mesh.rotation_degrees.z + 360.0
+			target_board_roll = board_mesh.rotation_degrees.z + (360.0 * roll_sign)
 			is_flip_in_progress = true
 		elif input_state.active_flip_type == "Heelflip":
-			target_board_roll = board_mesh.rotation_degrees.z - 360.0
+			target_board_roll = board_mesh.rotation_degrees.z - (360.0 * roll_sign)
 			is_flip_in_progress = true
 		else:
 			target_board_roll = board_mesh.rotation_degrees.z
 			
 		if input_state.active_spin_type != "None":
-			target_board_yaw = board_mesh.rotation_degrees.y + 180.0
+			var spin_sign: float = -input_state.last_scoop_sign if (input_state.last_pop_type.contains("Nollie") or input_state.last_pop_type.contains("Fakie")) else input_state.last_scoop_sign
+			target_board_yaw = board_mesh.rotation_degrees.y + (180.0 * spin_sign)
 			is_flip_in_progress = true
 		else:
 			target_board_yaw = board_mesh.rotation_degrees.y
@@ -111,10 +123,12 @@ func _physics_process(delta: float) -> void:
 		vertical_velocity -= gravity_accel * delta
 		global_position.y += vertical_velocity * delta
 		
-		# Layer 1: Aerial Body & Deck Spin Authority (FS/BS 180s/360s via triggers)
+		# Layer 1: Aerial Body & Deck Spin Authority (FS/BS 180s/360s via triggers with fluid momentum smoothing)
 		# Applied to board_pivot.y so rolling travel vector and chase camera stay fixed behind the skater!
-		if abs(input_state.lean) > 0.05:
-			board_pivot.rotation_degrees.y -= input_state.lean * body_spin_speed_deg * delta
+		var target_spin: float = input_state.lean * body_spin_speed_deg
+		current_aerial_spin_rate = lerpf(current_aerial_spin_rate, target_spin, 20.0 * delta)
+		if abs(current_aerial_spin_rate) > 0.1:
+			board_pivot.rotation_degrees.y -= current_aerial_spin_rate * delta
 		
 		# Layer 2: Mid-Air Pitch Control (0.20 to 1.00 thumbsticks to angle nose/tail in air)
 		_apply_airborne_board_pitch(delta)
@@ -144,6 +158,7 @@ func _physics_process(delta: float) -> void:
 			global_position.y = 0.25
 			vertical_velocity = 0.0
 			is_grounded = true
+			current_aerial_spin_rate = 0.0
 			input_state.current_pop_state = FootInputState.PopState.NONE
 			_evaluate_touchdown_landing()
 	
@@ -157,17 +172,14 @@ func _physics_process(delta: float) -> void:
 
 func _apply_airborne_board_pitch(delta: float) -> void:
 	var target_pitch_deg: float = 0.0
-	# In mid-air, full deflection range (0.20 to 1.0) directly tilts the board for catching manuals or leveling out
-	if input_state.stance == FootInputState.Stance.REGULAR:
-		if input_state.right_stick_raw.y > 0.15:
-			target_pitch_deg = input_state.right_stick_raw.y * 24.0 # Tail dip
-		elif input_state.left_stick_raw.y < -0.15:
-			target_pitch_deg = input_state.left_stick_raw.y * 24.0 # Nose dip
-	else:
-		if input_state.left_stick_raw.y > 0.15:
-			target_pitch_deg = input_state.left_stick_raw.y * 24.0
-		elif input_state.right_stick_raw.y < -0.15:
-			target_pitch_deg = input_state.right_stick_raw.y * 24.0
+	var left_is_front: bool = input_state.leading_foot.begins_with("Left")
+	var front_stick: Vector2 = input_state.left_stick_raw if left_is_front else input_state.right_stick_raw
+	var back_stick: Vector2 = input_state.right_stick_raw if left_is_front else input_state.left_stick_raw
+	
+	if back_stick.y > 0.15:
+		target_pitch_deg = back_stick.y * 24.0 # Tail dip (trailing edge)
+	elif front_stick.y < -0.15:
+		target_pitch_deg = front_stick.y * 24.0 # Nose dip (leading edge)
 	
 	board_pivot.rotation_degrees.x = lerpf(board_pivot.rotation_degrees.x, target_pitch_deg, 14.0 * delta)
 
@@ -184,11 +196,21 @@ func _evaluate_touchdown_landing() -> void:
 		manual_timer = 0.0
 		return
 		
-	# Snap touchdown yaw to nearest 180 orientation (Regular Forward vs Fakie/Switch)
+	# Snap touchdown yaw to nearest 180 orientation with ±45° precision landing window
 	var curr_yaw: float = fmod(board_pivot.rotation_degrees.y, 360.0)
 	if curr_yaw < 0.0:
 		curr_yaw += 360.0
-	if curr_yaw >= 90.0 and curr_yaw <= 270.0:
+	
+	# Sideways Landing Bail (perpendicular to momentum between 45° to 135° or 225° to 315°)
+	if (curr_yaw >= 45.0 and curr_yaw <= 135.0) or (curr_yaw >= 225.0 and curr_yaw <= 315.0):
+		input_state.trick_status_string = "BAIL! (Sideways Landing / Wheel Skid)"
+		current_speed = 0.0 # Speed loss from sideways wheel friction
+		board_pivot.rotation_degrees.x = 0.0
+		board_pivot.rotation_degrees.y = 0.0 if (curr_yaw < 90.0 or curr_yaw > 270.0) else 180.0
+		manual_timer = 0.0
+		return
+		
+	if curr_yaw >= 135.0 and curr_yaw <= 225.0:
 		board_pivot.rotation_degrees.y = 180.0 # Riding Switch / Fakie!
 	else:
 		board_pivot.rotation_degrees.y = 0.0 # Riding Regular Forward!
@@ -196,17 +218,15 @@ func _evaluate_touchdown_landing() -> void:
 	var pitch: float = board_pivot.rotation_degrees.x
 	var in_manual_zone: bool = false
 	
-	# Check if stick is cleanly held within the expanded Manual Zone (0.20 to 0.90) upon touchdown
-	if input_state.stance == FootInputState.Stance.REGULAR:
-		if pitch > 5.0 and input_state.right_stick_raw.y >= 0.20 and input_state.right_stick_raw.y <= 0.90:
-			in_manual_zone = true
-		elif pitch < -5.0 and input_state.left_stick_raw.y <= -0.20 and input_state.left_stick_raw.y >= -0.90:
-			in_manual_zone = true
-	else:
-		if pitch > 5.0 and input_state.left_stick_raw.y >= 0.20 and input_state.left_stick_raw.y <= 0.90:
-			in_manual_zone = true
-		elif pitch < -5.0 and input_state.right_stick_raw.y <= -0.20 and input_state.right_stick_raw.y >= -0.90:
-			in_manual_zone = true
+	var left_is_front: bool = input_state.leading_foot.begins_with("Left")
+	var front_stick: Vector2 = input_state.left_stick_raw if left_is_front else input_state.right_stick_raw
+	var back_stick: Vector2 = input_state.right_stick_raw if left_is_front else input_state.left_stick_raw
+	
+	# Check if back or front stick is cleanly held within the expanded Manual Zone (0.20 to 0.90) upon touchdown
+	if pitch > 5.0 and back_stick.y >= 0.20 and back_stick.y <= 0.90:
+		in_manual_zone = true # Touchdown into standard / switch manual!
+	elif pitch < -5.0 and front_stick.y <= -0.20 and front_stick.y >= -0.90:
+		in_manual_zone = true # Touchdown into nose / switch nose manual!
 	
 	if in_manual_zone:
 		# INSTANT MANUAL CATCH: bypass loading delay and continue rolling smoothly!
@@ -225,18 +245,15 @@ func _evaluate_touchdown_landing() -> void:
 
 func _apply_grounded_board_pitch(delta: float) -> void:
 	var target_pitch_deg: float = 0.0
-	# Manuals trigger in the expanded middle zone between 0.20 and 0.90.
-	# Full stick extension (> 0.90) is reserved for Trick/Pop Setup and holds the deck level on pavement!
-	if input_state.stance == FootInputState.Stance.REGULAR:
-		if input_state.right_stick_raw.y > 0.20 and input_state.right_stick_raw.y <= 0.90:
-			target_pitch_deg = input_state.right_stick_raw.y * 24.0
-		elif input_state.left_stick_raw.y < -0.20 and input_state.left_stick_raw.y >= -0.90:
-			target_pitch_deg = input_state.left_stick_raw.y * 24.0
-	else: # GOOFY stance (Left foot is over Tail)
-		if input_state.left_stick_raw.y > 0.20 and input_state.left_stick_raw.y <= 0.90:
-			target_pitch_deg = input_state.left_stick_raw.y * 24.0
-		elif input_state.right_stick_raw.y < -0.20 and input_state.right_stick_raw.y >= -0.90:
-			target_pitch_deg = input_state.right_stick_raw.y * 24.0
+	var left_is_front: bool = input_state.leading_foot.begins_with("Left")
+	var front_stick: Vector2 = input_state.left_stick_raw if left_is_front else input_state.right_stick_raw
+	var back_stick: Vector2 = input_state.right_stick_raw if left_is_front else input_state.left_stick_raw
+	
+	# Manuals trigger in the expanded middle zone between 0.20 and 0.90 on whichever stick corresponds to leading/trailing edge!
+	if back_stick.y > 0.20 and back_stick.y <= 0.90:
+		target_pitch_deg = back_stick.y * 24.0
+	elif front_stick.y < -0.20 and front_stick.y >= -0.90:
+		target_pitch_deg = front_stick.y * 24.0
 	
 	# Tightened Grounded Manual Delay (80ms): ignores brief transition frames when fast-snapping to full extension
 	if is_grounded and abs(target_pitch_deg) > 0.5:
@@ -261,26 +278,24 @@ func _animate_foot_push_stroke(delta: float) -> void:
 			right_foot.position = right_foot_rest
 			active_push_foot = ""
 		else:
-			# Sinusoidal stroke curve sweeping foot out and down against pavement
-			var stroke_offset: float = sin(progress * PI)
+			# Sinusoidal dip to ground zero (Y - 0.055) paired with a forward-to-backward sweeping thrust on Z
+			var vertical_dip: float = sin(progress * PI) * -0.055
+			var lateral_reach: float = sin(progress * PI) * 0.22
+			var longitudinal_sweep: float = cos(progress * PI) * -0.15 # Reaches forward at start, thrusts backward at finish!
 			if active_push_foot == "left":
-				left_foot.position = left_foot_rest + Vector3(-0.2 * stroke_offset, -0.05 * stroke_offset, 0.0)
+				left_foot.position = left_foot_rest + Vector3(-lateral_reach, vertical_dip, longitudinal_sweep)
 			else:
-				right_foot.position = right_foot_rest + Vector3(0.2 * stroke_offset, -0.05 * stroke_offset, 0.0)
+				right_foot.position = right_foot_rest + Vector3(lateral_reach, vertical_dip, longitudinal_sweep)
 
 func _animate_ankle_pegs(delta: float) -> void:
 	if input_state.left_mag > 0.05:
-		var target_y: float = -input_state.left_angle
-		var target_x: float = -input_state.left_mag * 0.35
-		left_peg_pivot.rotation.y = lerp_angle(left_peg_pivot.rotation.y, target_y, 16.0 * delta)
-		left_peg_pivot.rotation.x = lerpf(left_peg_pivot.rotation.x, target_x, 16.0 * delta)
+		left_peg_pivot.rotation_degrees.x = lerpf(left_peg_pivot.rotation_degrees.x, input_state.left_stick_raw.y * 35.0, 16.0 * delta)
+		left_peg_pivot.rotation_degrees.z = lerpf(left_peg_pivot.rotation_degrees.z, -input_state.left_stick_raw.x * 35.0, 16.0 * delta)
 	else:
 		left_peg_pivot.rotation = left_peg_pivot.rotation.lerp(Vector3.ZERO, 16.0 * delta)
 		
 	if input_state.right_mag > 0.05:
-		var target_y: float = -input_state.right_angle
-		var target_x: float = -input_state.right_mag * 0.35
-		right_peg_pivot.rotation.y = lerp_angle(right_peg_pivot.rotation.y, target_y, 16.0 * delta)
-		right_peg_pivot.rotation.x = lerpf(right_peg_pivot.rotation.x, target_x, 16.0 * delta)
+		right_peg_pivot.rotation_degrees.x = lerpf(right_peg_pivot.rotation_degrees.x, input_state.right_stick_raw.y * 35.0, 16.0 * delta)
+		right_peg_pivot.rotation_degrees.z = lerpf(right_peg_pivot.rotation_degrees.z, -input_state.right_stick_raw.x * 35.0, 16.0 * delta)
 	else:
 		right_peg_pivot.rotation = right_peg_pivot.rotation.lerp(Vector3.ZERO, 16.0 * delta)

@@ -38,39 +38,43 @@ func _generate_continuous_deck() -> void:
 		elif z < -kicktail_start_z:
 			y_base = (-z - kicktail_start_z) * slope_tan
 			
-		# Cross section: Left edge (-X), Center (0), Right edge (+X)
-		var top_left: Vector3 = Vector3(-w, y_base + half_thickness + 0.002, z)
-		var top_center: Vector3 = Vector3(0.0, y_base + half_thickness, z)
-		var top_right: Vector3 = Vector3(w, y_base + half_thickness + 0.002, z)
-		
-		var bot_left: Vector3 = Vector3(-w, y_base - half_thickness + 0.002, z)
-		var bot_center: Vector3 = Vector3(0.0, y_base - half_thickness, z)
-		var bot_right: Vector3 = Vector3(w, y_base - half_thickness + 0.002, z)
-		
-		rings.append({"tl": top_left, "tc": top_center, "tr": top_right, "bl": bot_left, "bc": bot_center, "br": bot_right})
+		# 5-point smooth parabolic cross-section across deck width
+		var top_row: Array[Vector3] = []
+		var bot_row: Array[Vector3] = []
+		var x_ratios: Array[float] = [-1.0, -0.5, 0.0, 0.5, 1.0]
+		for ratio in x_ratios:
+			var x_pos: float = ratio * w
+			var concave_rise: float = pow(abs(ratio), 2.0) * 0.008 # Outer rail curves up by +0.008 (8mm), center sits at 0.0
+			top_row.append(Vector3(x_pos, y_base + half_thickness + concave_rise, z))
+			bot_row.append(Vector3(x_pos, y_base - half_thickness + concave_rise, z))
+			
+		rings.append({"top": top_row, "bot": bot_row})
 	
 	# Triangulate adjacent sections into smooth continuous faces
 	for i in range(rings.size() - 1):
-		var r0: Dictionary = rings[i]
-		var r1: Dictionary = rings[i+1]
+		var t0: Array[Vector3] = rings[i]["top"]
+		var t1: Array[Vector3] = rings[i+1]["top"]
+		var b0: Array[Vector3] = rings[i]["bot"]
+		var b1: Array[Vector3] = rings[i+1]["bot"]
 		
-		# Top Griptape Surface (Matte Black - upward normal winding)
-		_add_quad_rev(st_grip, r0.tl, r1.tl, r1.tc, r0.tc)
-		_add_quad_rev(st_grip, r0.tc, r1.tc, r1.tr, r0.tr)
-		
-		# Underside Maple Surface (Stained Orange - downward normal winding)
-		_add_quad(st_wood, r0.bl, r1.bl, r1.bc, r0.bc)
-		_add_quad(st_wood, r0.bc, r1.bc, r1.br, r0.br)
-		
-		# Side Rim Wood Edges
-		_add_quad(st_wood, r0.bl, r1.bl, r1.tl, r0.tl)
-		_add_quad_rev(st_wood, r0.br, r1.br, r1.tr, r0.tr)
+		for j in range(4):
+			# Top Griptape Surface (Concave bowl - upward normal winding)
+			_add_quad_rev(st_grip, t0[j], t1[j], t1[j+1], t0[j+1])
+			# Underside Maple Surface (Convex belly - downward normal winding)
+			_add_quad(st_wood, b0[j], b1[j], b1[j+1], b0[j+1])
+			
+		# Side Rim Wood Edges (Left rail j=0, Right rail j=4)
+		_add_quad(st_wood, b0[0], b1[0], t1[0], t0[0])
+		_add_quad_rev(st_wood, b0[4], b1[4], t1[4], t0[4])
 	
 	# Nose & Tail end cap trim
-	var first: Dictionary = rings[0]
-	var last: Dictionary = rings[rings.size() - 1]
-	_add_quad(st_wood, first.bl, first.br, first.tr, first.tl)
-	_add_quad_rev(st_wood, last.bl, last.br, last.tr, last.tl)
+	var first_t: Array[Vector3] = rings[0]["top"]
+	var first_b: Array[Vector3] = rings[0]["bot"]
+	var last_t: Array[Vector3] = rings[rings.size() - 1]["top"]
+	var last_b: Array[Vector3] = rings[rings.size() - 1]["bot"]
+	for j in range(4):
+		_add_quad(st_wood, first_b[j], first_b[j+1], first_t[j+1], first_t[j])
+		_add_quad_rev(st_wood, last_b[j], last_b[j+1], last_t[j+1], last_t[j])
 	
 	st_grip.generate_normals()
 	st_wood.generate_normals()

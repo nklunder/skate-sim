@@ -30,6 +30,7 @@ var pop_impulse_triggered: bool = false
 var last_pop_type: String = "None"
 var active_flip_type: String = "None"
 var active_spin_type: String = "None"
+var last_scoop_sign: float = -1.0
 var last_combo_string: String = "None"
 var _prev_space_pressed: bool = false
 
@@ -40,7 +41,7 @@ var left_foot_over: String = "Nose"
 var right_foot_over: String = "Tail"
 var current_velocity: Vector3 = Vector3.ZERO
 
-func _process(_delta: float) -> void:
+func _physics_process(_delta: float) -> void:
 	_poll_inputs()
 	_update_polar_decomposition()
 	_classify_push_strokes()
@@ -77,14 +78,19 @@ func _poll_inputs() -> void:
 	if lt < 0.05 and rt < 0.05:
 		lt = float(Input.is_physical_key_pressed(KEY_Q))
 		rt = float(Input.is_physical_key_pressed(KEY_E))
-	lean = rt - lt
+	var raw_lean: float = rt - lt
+	# Apply audio-log power curve (exponent 2.2) to desensitize light-to-mid trigger pulls while preserving full speed at 1.0
+	lean = signf(raw_lean) * pow(absf(raw_lean), 2.2)
 	
 	# Push Button polling (Joypad X/Square for Left Foot, A/Cross for Right Foot; V / B for keyboard)
 	var curr_push_left: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_X) or Input.is_physical_key_pressed(KEY_V)
 	var curr_push_right: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_A) or Input.is_physical_key_pressed(KEY_B)
 	
-	push_left_triggered = curr_push_left and not _prev_push_left
-	push_right_triggered = curr_push_right and not _prev_push_right
+	# Latch push triggers so button presses aren't dropped before SkaterController evaluation
+	if curr_push_left and not _prev_push_left:
+		push_left_triggered = true
+	if curr_push_right and not _prev_push_right:
+		push_right_triggered = true
 	_prev_push_left = curr_push_left
 	_prev_push_right = curr_push_right
 	
@@ -101,87 +107,102 @@ func _detect_pop_load_and_flick() -> void:
 	if current_pop_state == PopState.POPPED:
 		return # Wait for SkaterController touchdown to reset state
 		
-	if stance == Stance.REGULAR:
-		# Ollie Load (Back foot / Right stick fully pulled down > 0.90 to match expanded manual zone)
-		if right_stick_raw.y > 0.90:
-			current_pop_state = PopState.LOADING_OLLIE
-			trick_status_string = "Loading Ollie (Tail)"
-		# Nollie Load (Front foot / Left stick pushed fully forward < -0.90)
-		elif left_stick_raw.y < -0.90:
-			current_pop_state = PopState.LOADING_NOLLIE
-			trick_status_string = "Loading Nollie (Nose)"
-		
-		# Execute Flick Pop from loaded states (allows vertical up or sideways -90°/+90° flicks)
-		if current_pop_state == PopState.LOADING_OLLIE and left_stick_raw.length() >= 0.35 and left_stick_raw.y <= 0.20:
-			pop_impulse_triggered = true
-			current_pop_state = PopState.POPPED
+	# Determine leading (front) and trailing (back) sticks dynamically based on live travel stance
+	var left_is_front: bool = leading_foot.begins_with("Left")
+	var front_stick: Vector2 = left_stick_raw if left_is_front else right_stick_raw
+	var back_stick: Vector2 = right_stick_raw if left_is_front else left_stick_raw
+	
+	# Ollie / Switch Ollie Load (Trailing back foot pulled down in lower hemisphere)
+	if back_stick.length() >= 0.70 and back_stick.y >= 0.50:
+		current_pop_state = PopState.LOADING_OLLIE
+		trick_status_string = "Loading Ollie (Tail)"
+	# Nollie / Switch Nollie Load (Leading front foot pushed up in upper hemisphere)
+	elif front_stick.length() >= 0.70 and front_stick.y <= -0.50:
+		current_pop_state = PopState.LOADING_NOLLIE
+		trick_status_string = "Loading Nollie (Nose)"
+	
+	# Execute Flick Pop from loaded states
+	if current_pop_state == PopState.LOADING_OLLIE and front_stick.length() >= 0.35 and front_stick.y <= 0.20:
+		pop_impulse_triggered = true
+		current_pop_state = PopState.POPPED
+		# Differentiate Switch vs Regular Ollie based on profile stance vs live orientation
+		if (stance == Stance.REGULAR and not left_is_front) or (stance == Stance.GOOFY and left_is_front):
+			last_pop_type = "Switch Ollie"
+		else:
 			last_pop_type = "Ollie"
-			_evaluate_flip_combo()
-		elif current_pop_state == PopState.LOADING_NOLLIE and right_stick_raw.length() >= 0.35 and right_stick_raw.y >= -0.20:
-			pop_impulse_triggered = true
-			current_pop_state = PopState.POPPED
+		_evaluate_flip_combo()
+	elif current_pop_state == PopState.LOADING_NOLLIE and back_stick.length() >= 0.35 and back_stick.y >= -0.20:
+		pop_impulse_triggered = true
+		current_pop_state = PopState.POPPED
+		if (stance == Stance.REGULAR and not left_is_front) or (stance == Stance.GOOFY and left_is_front):
+			last_pop_type = "Fakie Ollie"
+		else:
 			last_pop_type = "Nollie"
-			_evaluate_flip_combo()
-		
-		# Reset to None if sticks return to neutral without flicking
-		if right_stick_raw.length() < 0.20 and left_stick_raw.length() < 0.20 and current_pop_state != PopState.NONE:
-			current_pop_state = PopState.NONE
-			trick_status_string = "Grounded & Rolling"
-	else: # GOOFY stance
-		if left_stick_raw.y > 0.90:
-			current_pop_state = PopState.LOADING_OLLIE
-			trick_status_string = "Loading Ollie (Tail)"
-		elif right_stick_raw.y < -0.90:
-			current_pop_state = PopState.LOADING_NOLLIE
-			trick_status_string = "Loading Nollie (Nose)"
-			
-		if current_pop_state == PopState.LOADING_OLLIE and right_stick_raw.length() >= 0.35 and right_stick_raw.y <= 0.20:
-			pop_impulse_triggered = true
-			current_pop_state = PopState.POPPED
-			last_pop_type = "Ollie"
-			_evaluate_flip_combo()
-		elif current_pop_state == PopState.LOADING_NOLLIE and left_stick_raw.length() >= 0.35 and left_stick_raw.y >= -0.20:
-			pop_impulse_triggered = true
-			current_pop_state = PopState.POPPED
-			last_pop_type = "Nollie"
-			_evaluate_flip_combo()
-			
-		if right_stick_raw.length() < 0.20 and left_stick_raw.length() < 0.20 and current_pop_state != PopState.NONE:
-			current_pop_state = PopState.NONE
-			trick_status_string = "Grounded & Rolling"
+		_evaluate_flip_combo()
+	
+	# Reset to None if sticks return to neutral without flicking
+	if right_stick_raw.length() < 0.20 and left_stick_raw.length() < 0.20 and current_pop_state != PopState.NONE:
+		current_pop_state = PopState.NONE
+		trick_status_string = "Grounded & Rolling"
 
 func _evaluate_flip_combo() -> void:
 	active_flip_type = "None"
 	active_spin_type = "None"
 	
-	# Evaluate 90-degree side flick quadrant (45° above and below horizontal axis: abs(y) <= abs(x))
-	var flick_vec: Vector2 = left_stick_raw if stance == Stance.REGULAR else right_stick_raw
-	var sweep_vec: Vector2 = right_stick_raw if stance == Stance.REGULAR else left_stick_raw
+	var left_is_front: bool = leading_foot.begins_with("Left")
+	var flick_stick: Vector2
+	var scoop_stick: Vector2
+	var flick_is_left_foot: bool
 	
-	if flick_vec.length() >= 0.25 and abs(flick_vec.y) <= abs(flick_vec.x):
-		if flick_vec.x < 0.0:
-			active_flip_type = "Kickflip"
+	if last_pop_type.contains("Nollie") or last_pop_type.contains("Fakie"):
+		# In a Nollie or Fakie Ollie pop, the TRAILING foot is the flicking foot
+		flick_stick = right_stick_raw if left_is_front else left_stick_raw
+		scoop_stick = left_stick_raw if left_is_front else right_stick_raw
+		flick_is_left_foot = not left_is_front
+	else:
+		# In an Ollie pop, the LEADING foot is the flicking foot
+		flick_stick = left_stick_raw if left_is_front else right_stick_raw
+		scoop_stick = right_stick_raw if left_is_front else left_stick_raw
+		flick_is_left_foot = left_is_front
+	
+	# Universal Flick Rule: Flicking outward (-X for Left, +X for Right = behind body) = Kickflip; Inward (+X for Left, -X for Right = in front of body) = Heelflip
+	if flick_stick.length() >= 0.25 and abs(flick_stick.y) <= abs(flick_stick.x):
+		if flick_is_left_foot:
+			active_flip_type = "Kickflip" if flick_stick.x < 0.0 else "Heelflip"
 		else:
-			active_flip_type = "Heelflip"
+			active_flip_type = "Kickflip" if flick_stick.x > 0.0 else "Heelflip"
 	elif Input.is_physical_key_pressed(KEY_Z) or Input.is_physical_key_pressed(KEY_F):
 		active_flip_type = "Kickflip"
 	elif Input.is_physical_key_pressed(KEY_X) or Input.is_physical_key_pressed(KEY_G):
 		active_flip_type = "Heelflip"
 		
-	if (sweep_vec.length() >= 0.25 and abs(sweep_vec.y) <= abs(sweep_vec.x)) or Input.is_physical_key_pressed(KEY_C) or Input.is_physical_key_pressed(KEY_H):
-		active_spin_type = "Pop Shove-it"
+	if (scoop_stick.length() >= 0.35 and abs(scoop_stick.x) >= 0.35) or Input.is_physical_key_pressed(KEY_C) or Input.is_physical_key_pressed(KEY_H):
+		var scoop_is_left_foot: bool = not flick_is_left_foot
+		if Input.is_physical_key_pressed(KEY_C) or Input.is_physical_key_pressed(KEY_H) or abs(scoop_stick.x) < 0.1:
+			active_spin_type = "Pop Shove-it"
+			last_scoop_sign = -1.0
+		else:
+			last_scoop_sign = -1.0 if scoop_stick.x < 0.0 else 1.0
+			# Check anatomical inward/outward to label Backside vs Frontside Shove-it
+			if scoop_is_left_foot:
+				active_spin_type = "FS Pop Shove-it" if scoop_stick.x < 0.0 else "Pop Shove-it"
+			else:
+				active_spin_type = "Pop Shove-it" if scoop_stick.x < 0.0 else "FS Pop Shove-it"
 		
 	# Construct combo trick description
+	var combo_prefix: String = "Fakie" if last_pop_type == "Fakie Ollie" else last_pop_type
 	if active_spin_type != "None" and active_flip_type != "None":
-		last_combo_string = "Varial " + active_flip_type
+		var spin_word: String = "FS Varial" if active_spin_type.begins_with("FS") else "Varial"
+		last_combo_string = (combo_prefix + " " + spin_word + " " + active_flip_type).strip_edges() if last_pop_type != "Ollie" else (spin_word + " " + active_flip_type)
 	elif active_flip_type != "None":
-		last_combo_string = (last_pop_type + " " + active_flip_type).strip_edges() if last_pop_type != "Ollie" else active_flip_type
+		last_combo_string = (combo_prefix + " " + active_flip_type).strip_edges() if last_pop_type != "Ollie" else active_flip_type
 	elif active_spin_type != "None":
-		last_combo_string = (last_pop_type + " " + active_spin_type).strip_edges() if last_pop_type != "Ollie" else active_spin_type
+		last_combo_string = (combo_prefix + " " + active_spin_type).strip_edges() if last_pop_type != "Ollie" else active_spin_type
 	else:
 		last_combo_string = last_pop_type
 		
 	trick_status_string = "Airborne: %s!" % last_combo_string
+
 
 func _update_polar_decomposition() -> void:
 	left_mag = left_stick_raw.length()
