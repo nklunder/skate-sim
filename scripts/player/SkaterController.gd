@@ -13,8 +13,8 @@ var is_grounded: bool = true
 var vertical_velocity: float = 0.0
 
 @export_category("Flip & Spin Physics (3-Layer Hierarchy)")
-@export var flip_speed_deg: float = 760.0
-@export var spin_speed_deg: float = 540.0
+@export var flip_speed_deg: float = 608.0
+@export var spin_speed_deg: float = 432.0
 @export var body_spin_speed_deg: float = 554.0
 var target_board_roll: float = 0.0
 var target_board_yaw: float = 0.0
@@ -38,9 +38,9 @@ var is_flip_in_progress: bool = false
 # Motion & Push Physics
 var velocity: Vector3 = Vector3.ZERO
 var current_speed: float = 0.0
-var max_push_speed: float = 7.0
-var push_impulse: float = 2.5
-var rolling_friction: float = 1.25
+var max_push_speed: float = 5.6
+var push_impulse: float = 2.0
+var rolling_friction: float = 1.0
 
 # Foot Push Animation State (Elevated to Y = 0.055 to prevent board collisions)
 var left_foot_rest: Vector3 = Vector3(0, 0.055, -0.25)
@@ -94,14 +94,15 @@ func _physics_process(delta: float) -> void:
 		is_grounded = false
 		input_state.pop_impulse_triggered = false
 		
-		# Initial kicktail pitch angle upon popping
+		# Initial kicktail pitch angle and flip roll sign upon popping (inverted in Switch/Fakie where Y == 180!)
+		var stance_sign: float = -1.0 if (not input_state.leading_foot.begins_with("Left")) else 1.0
 		if input_state.last_pop_type.contains("Nollie") or input_state.last_pop_type.contains("Fakie"):
-			board_pivot.rotation_degrees.x = -22.0 # Leading nose pop
+			board_pivot.rotation_degrees.x = -22.0 * stance_sign # Leading nose pop
 		else:
-			board_pivot.rotation_degrees.x = 22.0 # Trailing tail pop
+			board_pivot.rotation_degrees.x = 22.0 * stance_sign # Trailing tail pop
 			
-		# Configure BoardMesh flip & spin targets (Layer 3) with reverse roll direction for Nollie/Fakie flips!
-		var roll_sign: float = -1.0 if (input_state.last_pop_type.contains("Nollie") or input_state.last_pop_type.contains("Fakie")) else 1.0
+		# Configure BoardMesh flip & spin targets (Layer 3) with proper roll orientation for Switch/Fakie!
+		var roll_sign: float = stance_sign
 		if input_state.active_flip_type == "Kickflip":
 			target_board_roll = board_mesh.rotation_degrees.z + (360.0 * roll_sign)
 			is_flip_in_progress = true
@@ -113,7 +114,9 @@ func _physics_process(delta: float) -> void:
 			
 		if input_state.active_spin_type != "None":
 			var spin_sign: float = -input_state.last_scoop_sign if (input_state.last_pop_type.contains("Nollie") or input_state.last_pop_type.contains("Fakie")) else input_state.last_scoop_sign
-			target_board_yaw = board_mesh.rotation_degrees.y + (180.0 * spin_sign)
+			var is_360_spin: bool = (input_state.active_spin_type.begins_with("360") or input_state.last_combo_string.contains("360") or input_state.last_combo_string.contains("Laser"))
+			var spin_deg: float = 360.0 if is_360_spin else 180.0
+			target_board_yaw = board_mesh.rotation_degrees.y + (spin_deg * spin_sign)
 			is_flip_in_progress = true
 		else:
 			target_board_yaw = board_mesh.rotation_degrees.y
@@ -135,8 +138,9 @@ func _physics_process(delta: float) -> void:
 		
 		# Layer 3: Deck Flip & Spin Authority on BoardMesh with Shoe Hover Catching
 		if is_flip_in_progress:
+			var active_spin_vel: float = spin_speed_deg * 2.0 if absf(target_board_yaw - board_mesh.rotation_degrees.y) > 185.0 or (input_state.active_spin_type.begins_with("360") or input_state.last_combo_string.contains("360") or input_state.last_combo_string.contains("Laser")) else spin_speed_deg
 			board_mesh.rotation_degrees.z = move_toward(board_mesh.rotation_degrees.z, target_board_roll, flip_speed_deg * delta)
-			board_mesh.rotation_degrees.y = move_toward(board_mesh.rotation_degrees.y, target_board_yaw, spin_speed_deg * delta)
+			board_mesh.rotation_degrees.y = move_toward(board_mesh.rotation_degrees.y, target_board_yaw, active_spin_vel * delta)
 			
 			# Elevate shoe boxes slightly above spinning deck (Y = 0.18m)
 			left_foot.position.y = lerpf(left_foot.position.y, 0.18, 16.0 * delta)
@@ -180,6 +184,9 @@ func _apply_airborne_board_pitch(delta: float) -> void:
 		target_pitch_deg = back_stick.y * 24.0 # Tail dip (trailing edge)
 	elif front_stick.y < -0.15:
 		target_pitch_deg = front_stick.y * 24.0 # Nose dip (leading edge)
+		
+	if not left_is_front:
+		target_pitch_deg = -target_pitch_deg # Invert local X rotation when board is at Y=180
 	
 	board_pivot.rotation_degrees.x = lerpf(board_pivot.rotation_degrees.x, target_pitch_deg, 14.0 * delta)
 
@@ -223,9 +230,10 @@ func _evaluate_touchdown_landing() -> void:
 	var back_stick: Vector2 = input_state.right_stick_raw if left_is_front else input_state.left_stick_raw
 	
 	# Check if back or front stick is cleanly held within the expanded Manual Zone (0.20 to 0.90) upon touchdown
-	if pitch > 5.0 and back_stick.y >= 0.20 and back_stick.y <= 0.90:
+	var effective_pitch: float = -pitch if not left_is_front else pitch
+	if effective_pitch > 5.0 and back_stick.y >= 0.20 and back_stick.y <= 0.90:
 		in_manual_zone = true # Touchdown into standard / switch manual!
-	elif pitch < -5.0 and front_stick.y <= -0.20 and front_stick.y >= -0.90:
+	elif effective_pitch < -5.0 and front_stick.y <= -0.20 and front_stick.y >= -0.90:
 		in_manual_zone = true # Touchdown into nose / switch nose manual!
 	
 	if in_manual_zone:
@@ -254,6 +262,9 @@ func _apply_grounded_board_pitch(delta: float) -> void:
 		target_pitch_deg = back_stick.y * 24.0
 	elif front_stick.y < -0.20 and front_stick.y >= -0.90:
 		target_pitch_deg = front_stick.y * 24.0
+		
+	if not left_is_front:
+		target_pitch_deg = -target_pitch_deg # Invert local X rotation when board is at Y=180
 	
 	# Tightened Grounded Manual Delay (80ms): ignores brief transition frames when fast-snapping to full extension
 	if is_grounded and abs(target_pitch_deg) > 0.5:

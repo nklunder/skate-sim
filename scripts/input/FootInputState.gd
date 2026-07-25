@@ -31,6 +31,8 @@ var last_pop_type: String = "None"
 var active_flip_type: String = "None"
 var active_spin_type: String = "None"
 var last_scoop_sign: float = -1.0
+var initial_scoop_angle: float = 0.0
+var max_swept_angle: float = 0.0
 var last_combo_string: String = "None"
 var _prev_space_pressed: bool = false
 
@@ -113,13 +115,29 @@ func _detect_pop_load_and_flick() -> void:
 	var back_stick: Vector2 = right_stick_raw if left_is_front else left_stick_raw
 	
 	# Ollie / Switch Ollie Load (Trailing back foot pulled down in lower hemisphere)
-	if back_stick.length() >= 0.70 and back_stick.y >= 0.50:
-		current_pop_state = PopState.LOADING_OLLIE
-		trick_status_string = "Loading Ollie (Tail)"
-	# Nollie / Switch Nollie Load (Leading front foot pushed up in upper hemisphere)
-	elif front_stick.length() >= 0.70 and front_stick.y <= -0.50:
-		current_pop_state = PopState.LOADING_NOLLIE
-		trick_status_string = "Loading Nollie (Nose)"
+	if current_pop_state == PopState.NONE:
+		if back_stick.length() >= 0.70 and back_stick.y >= 0.50:
+			current_pop_state = PopState.LOADING_OLLIE
+			trick_status_string = "Loading Ollie (Tail)"
+			initial_scoop_angle = rad_to_deg(back_stick.angle())
+			max_swept_angle = 0.0
+		# Nollie / Switch Nollie Load (Leading front foot pushed up in upper hemisphere)
+		elif front_stick.length() >= 0.70 and front_stick.y <= -0.50:
+			current_pop_state = PopState.LOADING_NOLLIE
+			trick_status_string = "Loading Nollie (Nose)"
+			initial_scoop_angle = rad_to_deg(front_stick.angle())
+			max_swept_angle = 0.0
+			
+	# Measure total angular sweep (arc span) of the scooping thumbstick while loading pop
+	if current_pop_state != PopState.NONE:
+		var active_scoop: Vector2 = back_stick if current_pop_state == PopState.LOADING_OLLIE else front_stick
+		if active_scoop.length() >= 0.30:
+			if absf(active_scoop.x) >= 0.20:
+				last_scoop_sign = -1.0 if active_scoop.x < 0.0 else 1.0
+			var curr_deg: float = rad_to_deg(active_scoop.angle())
+			var swept: float = absf(rad_to_deg(angle_difference(deg_to_rad(initial_scoop_angle), deg_to_rad(curr_deg))))
+			if swept > max_swept_angle:
+				max_swept_angle = swept
 	
 	# Execute Flick Pop from loaded states
 	if current_pop_state == PopState.LOADING_OLLIE and front_stick.length() >= 0.35 and front_stick.y <= 0.20:
@@ -143,6 +161,7 @@ func _detect_pop_load_and_flick() -> void:
 	# Reset to None if sticks return to neutral without flicking
 	if right_stick_raw.length() < 0.20 and left_stick_raw.length() < 0.20 and current_pop_state != PopState.NONE:
 		current_pop_state = PopState.NONE
+		max_swept_angle = 0.0
 		trick_status_string = "Grounded & Rolling"
 
 func _evaluate_flip_combo() -> void:
@@ -176,28 +195,48 @@ func _evaluate_flip_combo() -> void:
 	elif Input.is_physical_key_pressed(KEY_X) or Input.is_physical_key_pressed(KEY_G):
 		active_flip_type = "Heelflip"
 		
-	if (scoop_stick.length() >= 0.35 and abs(scoop_stick.x) >= 0.35) or Input.is_physical_key_pressed(KEY_C) or Input.is_physical_key_pressed(KEY_H):
+	var is_360_shuv: bool = (max_swept_angle >= 110.0 or Input.is_physical_key_pressed(KEY_H))
+	if is_360_shuv or (max_swept_angle >= 35.0 or (scoop_stick.length() >= 0.35 and absf(scoop_stick.x) >= 0.35) or Input.is_physical_key_pressed(KEY_C)):
 		var scoop_is_left_foot: bool = not flick_is_left_foot
-		if Input.is_physical_key_pressed(KEY_C) or Input.is_physical_key_pressed(KEY_H) or abs(scoop_stick.x) < 0.1:
-			active_spin_type = "Pop Shove-it"
-			last_scoop_sign = -1.0
-		else:
-			last_scoop_sign = -1.0 if scoop_stick.x < 0.0 else 1.0
-			# Check anatomical inward/outward to label Backside vs Frontside Shove-it
+		var is_frontside: bool = false
+		if not Input.is_physical_key_pressed(KEY_C) and not Input.is_physical_key_pressed(KEY_H):
+			if absf(scoop_stick.x) >= 0.20:
+				last_scoop_sign = -1.0 if scoop_stick.x < 0.0 else 1.0
 			if scoop_is_left_foot:
-				active_spin_type = "FS Pop Shove-it" if scoop_stick.x < 0.0 else "Pop Shove-it"
+				is_frontside = (last_scoop_sign < 0.0)
 			else:
-				active_spin_type = "Pop Shove-it" if scoop_stick.x < 0.0 else "FS Pop Shove-it"
+				is_frontside = (last_scoop_sign > 0.0)
+		else:
+			last_scoop_sign = -1.0
+			
+		if is_360_shuv:
+			active_spin_type = "360 FS Pop Shove-it" if is_frontside else "360 Pop Shove-it"
+		else:
+			active_spin_type = "FS Pop Shove-it" if is_frontside else "Pop Shove-it"
 		
-	# Construct combo trick description
+	# Construct combo trick description with authentic 360 Flip / Laser Flip nomenclature
 	var combo_prefix: String = "Fakie" if last_pop_type == "Fakie Ollie" else last_pop_type
-	if active_spin_type != "None" and active_flip_type != "None":
+	var body: String = ""
+	if active_spin_type.begins_with("360"):
+		var is_fs_360: bool = active_spin_type.contains("FS")
+		if active_flip_type == "Kickflip":
+			body = "360 FS Flip" if is_fs_360 else "360 Flip"
+		elif active_flip_type == "Heelflip":
+			body = "Laser Flip" if is_fs_360 else "360 Heelflip"
+		else:
+			body = active_spin_type
+	elif active_spin_type != "None" and active_flip_type != "None":
 		var spin_word: String = "FS Varial" if active_spin_type.begins_with("FS") else "Varial"
-		last_combo_string = (combo_prefix + " " + spin_word + " " + active_flip_type).strip_edges() if last_pop_type != "Ollie" else (spin_word + " " + active_flip_type)
+		body = spin_word + " " + active_flip_type
 	elif active_flip_type != "None":
-		last_combo_string = (combo_prefix + " " + active_flip_type).strip_edges() if last_pop_type != "Ollie" else active_flip_type
+		body = active_flip_type
 	elif active_spin_type != "None":
-		last_combo_string = (combo_prefix + " " + active_spin_type).strip_edges() if last_pop_type != "Ollie" else active_spin_type
+		body = active_spin_type
+	else:
+		body = ""
+		
+	if body != "":
+		last_combo_string = (combo_prefix + " " + body).strip_edges() if last_pop_type != "Ollie" else body
 	else:
 		last_combo_string = last_pop_type
 		
@@ -241,21 +280,13 @@ func update_stance_facts(pivot: Node3D, left_foot: Node3D, right_foot: Node3D, v
 		left_foot_over = "Tail"
 		right_foot_over = "Nose"
 	
-	# Live Trailing / Leading Foot check via velocity dot product
-	if vel.length_squared() > 0.05:
-		var travel_dir: Vector3 = vel.normalized()
-		var left_dot: float = (left_foot.global_position - pivot.global_position).dot(travel_dir)
-		var right_dot: float = (right_foot.global_position - pivot.global_position).dot(travel_dir)
-		if left_dot > right_dot:
-			leading_foot = "Left Foot"
-			trailing_foot = "Right Foot"
-		else:
-			leading_foot = "Right Foot"
-			trailing_foot = "Left Foot"
+	# Live Trailing / Leading Foot check via velocity or static forward alignment
+	var travel_dir: Vector3 = vel.normalized() if vel.length_squared() > 0.05 else -pivot.get_parent().global_transform.basis.z
+	var left_dot: float = (left_foot.global_position - pivot.global_position).dot(travel_dir)
+	var right_dot: float = (right_foot.global_position - pivot.global_position).dot(travel_dir)
+	if left_dot > right_dot:
+		leading_foot = "Left Foot"
+		trailing_foot = "Right Foot"
 	else:
-		if stance == Stance.REGULAR:
-			leading_foot = "Left Foot"
-			trailing_foot = "Right Foot"
-		else:
-			leading_foot = "Right Foot"
-			trailing_foot = "Left Foot"
+		leading_foot = "Right Foot"
+		trailing_foot = "Left Foot"
