@@ -1,0 +1,124 @@
+[gd_scene load_steps=18 format=3]
+
+[ext_resource type="PackedScene" path="res://scenes/player/SkaterRig.tscn" id="1_rig"]
+[ext_resource type="PackedScene" path="res://scenes/ui/DebugHUD.tscn" id="2_hud"]
+[ext_resource type="Shader" path="res://resources/checkerboard.gdshader" id="3_shader"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_world"]
+sky_top_color = Color(0.35, 0.5, 0.7, 1)
+sky_horizon_color = Color(0.65, 0.7, 0.75, 1)
+ground_bottom_color = Color(0.2, 0.22, 0.25, 1)
+ground_horizon_color = Color(0.65, 0.7, 0.75, 1)
+
+[sub_resource type="Sky" id="Sky_world"]
+sky_material = SubResource("ProceduralSkyMaterial_world")
+
+[sub_resource type="Environment" id="Environment_world"]
+background_mode = 2
+sky = SubResource("Sky_world")
+ambient_light_source = 3
+ambient_light_color = Color(0.7, 0.75, 0.8, 1)
+tonemap_mode = 2
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_ground"]
+size = Vector3(60, 0.2, 60)
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_checker"]
+render_priority = 0
+shader = ExtResource("3_shader")
+shader_parameter/color1 = Color(0.18, 0.2, 0.24, 1)
+shader_parameter/color2 = Color(0.75, 0.78, 0.82, 1)
+shader_parameter/grid_size = 2.0
+
+[sub_resource type="BoxMesh" id="BoxMesh_ground"]
+material = SubResource("ShaderMaterial_checker")
+size = Vector3(60, 0.2, 60)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_curb"]
+size = Vector3(8, 0.3, 1.2)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_curb"]
+albedo_color = Color(0.6, 0.62, 0.65, 1)
+roughness = 0.7
+
+[sub_resource type="BoxMesh" id="BoxMesh_curb"]
+material = SubResource("StandardMaterial3D_curb")
+size = Vector3(8, 0.3, 1.2)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_ramp"]
+size = Vector3(6, 0.2, 4)
+
+[sub_resource type="BoxMesh" id="BoxMesh_ramp"]
+material = SubResource("StandardMaterial3D_curb")
+size = Vector3(6, 0.2, 4)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_rail"]
+size = Vector3(0.08, 0.05, 5.0)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_rail"]
+albedo_color = Color(0.9, 0.85, 0.2, 1)
+metallic = 0.8
+roughness = 0.2
+
+[sub_resource type="BoxMesh" id="BoxMesh_rail"]
+material = SubResource("StandardMaterial3D_rail")
+size = Vector3(0.08, 0.05, 5.0)
+
+[node name="TestWorld" type="Node3D"]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_world")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.866025, -0.433013, 0.25, 0, 0.5, 0.866025, -0.5, -0.75, 0.433013, 0, 15, 0)
+shadow_enabled = true
+
+[node name="Ground" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.1, 0)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Ground"]
+shape = SubResource("BoxShape3D_ground")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Ground"]
+mesh = SubResource("BoxMesh_ground")
+
+[node name="Curb1" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 4, 0.15, -6)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Curb1"]
+shape = SubResource("BoxShape3D_curb")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Curb1"]
+mesh = SubResource("BoxMesh_curb")
+
+[node name="Curb2" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -4, 0.15, -12)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Curb2"]
+shape = SubResource("BoxShape3D_curb")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Curb2"]
+mesh = SubResource("BoxMesh_curb")
+
+[node name="Ramp" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.965926, 0.258819, 0, -0.258819, 0.965926, 0, 0.5, -16)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Ramp"]
+shape = SubResource("BoxShape3D_ramp")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Ramp"]
+mesh = SubResource("BoxMesh_ramp")
+
+[node name="Rail" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3.5, 0.5, -9)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Rail"]
+shape = SubResource("BoxShape3D_rail")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Rail"]
+mesh = SubResource("BoxMesh_rail")
+
+[node name="SkaterRig" parent="." instance=ExtResource("1_rig")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.25, 0)
+
+[node name="DebugHUD" parent="." instance=ExtResource("2_hud")]

@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="SkateBoardConfig" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/resources/SkateBoardConfig.gd" id="1_config"]
+
+[resource]
+script = ExtResource("1_config")
+ollie_pop_force = 6.0
+nollie_pop_force = 6.0
+scoop_force = 4.0
+turn_speed = 3.0
+lean_sensitivity = 2.0
+powerslide_threshold = 0.7
+max_pitch_angle = 35.0
+max_roll_angle = 30.0
+imperfect_landing_drag = 1.5
