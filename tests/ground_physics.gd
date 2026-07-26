@@ -34,6 +34,12 @@ var _peak_speed: float = 0.0
 var _min_speed: float = 1e9
 var _reversed: bool = false
 var _settle: int = 0
+var _pushes: int = 0
+## Sideways speed across the board axis. The discriminator for the push-skid regression: a directed
+## push leaves this alone for grip to remove, while one that merely rescaled the velocity vector
+## scaled it UP along with the forward component.
+var _max_lateral: float = 0.0
+var _initial_lateral: float = 0.0
 ## Largest single-frame change in the camera's WORLD yaw, and the residual the landing handed the
 ## rig. The camera is a rigid child of SkaterRoot, so a landing that jumps rig yaw would jump the
 ## view by the whole residual at once unless it is eased.
@@ -68,14 +74,24 @@ const CASES := [
 		"expect_stopped": true},
 	{"label": "15 deg slope: rolls downhill", "slope": 15.0, "speed": 0.0, "settle": 120,
 		"expect_rolling": true},
-	{"label": "15 deg slope: stalls, reverses", "slope": 15.0, "speed": -2.0, "settle": 180,
-		"expect_reversal": true},
+	{"label": "bank reversal, right view", "slope": 15.0, "speed": -2.0, "settle": 180,
+		"expect_reversal": true, "camera_side": 1},
+	{"label": "bank reversal, left view", "slope": 15.0, "speed": -2.0, "settle": 180,
+		"expect_reversal": true, "camera_side": -1},
 	{"label": "land 185 deg @ 7 m/s", "speed": 7.0, "land_yaw": 185.0,
 		"expect_landed": true, "expect_drift": 5.0},
 	{"label": "land 175 deg @ 7 m/s", "speed": 7.0, "land_yaw": 175.0,
 		"expect_landed": true, "expect_drift": -5.0},
 	{"label": "land 100 deg @ 7 m/s", "speed": 7.0, "land_yaw": 100.0, "expect_bail": true},
 	{"label": "land 100 deg @ 1.5 m/s", "speed": 1.5, "land_yaw": 100.0, "expect_landed": true},
+	# Pushing while drifting sideways must STRAIGHTEN the roll, not entrench it. Regression for a
+	# skid introduced by the velocity rewrite: current_speed was settable, and assigning it rescaled
+	# the horizontal velocity while preserving direction - so a kick scaled the sideways component
+	# up along with the forward one and drove the skater along a crooked line.
+	# Pushes start immediately, while the drift is still there to be amplified: grip scrubs a 40 deg
+	# drift away in about five frames, so a test that waits even a moment measures nothing.
+	{"label": "push while drifting sideways", "speed": -5.0, "settle": 90, "drift_deg": 40.0,
+		"push_every": 1, "expect_straighten": true},
 	# Carving now pays the same lateral-scrub toll as a crooked landing, because it is the same
 	# mechanism: turning the rig puts velocity off the rolling axis and grip drags it back. It must
 	# cost SOME speed (that is the weight the rewrite adds) without bleeding the skater dry.
@@ -119,6 +135,10 @@ func _start_case() -> void:
 	# own -Z axis, so travel starts aligned with the deck and the residual is the only thing off.
 	var vz: float = -c["speed"] if c.has("land_yaw") else c["speed"]
 	_skater.velocity = Vector3(0.0, 0.0, vz)
+	if c.has("drift_deg"):
+		_skater.velocity = _skater.velocity.rotated(Vector3.UP, deg_to_rad(c["drift_deg"]))
+	if c.has("camera_side"):
+		_skater.input_state.camera_side = c["camera_side"]
 	_frame = 0
 	_popped = false
 	_landed = false
@@ -126,12 +146,15 @@ func _start_case() -> void:
 	_min_speed = 1e9
 	_reversed = false
 	_settle = 0
+	_pushes = 0
+	_max_lateral = 0.0
+	_initial_lateral = _lateral_speed()
 	_max_cam_step = 0.0
 	_residual = 0.0
 	_board_jump = 0.0
 	_max_dir_step = 0.0
 	_max_off_centre = 0.0
-	_rest_off_centre = _off_centre()
+	_rest_off_centre = 0.0
 	_prev_dir = _travel_dir()
 	_prev_cam_yaw = _cam_yaw()
 	_prev_board_yaw = _board_yaw()
@@ -143,12 +166,21 @@ func _physics_process(_delta: float) -> void:
 	_frame += 1
 	var c: Dictionary = CASES[_case]
 
+	var cam: float = _cam_yaw()
+	_max_cam_step = maxf(_max_cam_step, absf(rad_to_deg(angle_difference(
+		deg_to_rad(_prev_cam_yaw), deg_to_rad(cam)))))
+	_prev_cam_yaw = cam
+
 	if c.has("land_yaw"):
 		_run_landing_case(c)
 	else:
 		_run_slope_case(c)
 
 func _run_slope_case(c: Dictionary) -> void:
+	_max_lateral = maxf(_max_lateral, _lateral_speed())
+	if c.has("push_every") and _frame % int(c["push_every"]) == 0:
+		_skater.input_state.push_right_triggered = true
+		_pushes += 1
 	if c.has("lean"):
 		_skater.input_state.lean = c["lean"] # Zeroed by _poll_inputs each tick with no device attached.
 	var speed: float = _skater.current_speed
@@ -173,16 +205,16 @@ func _run_landing_case(c: Dictionary) -> void:
 		return
 	if not _popped:
 		return
-	var cam: float = _cam_yaw()
-	_max_cam_step = maxf(_max_cam_step, absf(rad_to_deg(angle_difference(
-		deg_to_rad(_prev_cam_yaw), deg_to_rad(cam)))))
-	_prev_cam_yaw = cam
 	# Sampled before the harness writes land_yaw below, so this compares the last airborne frame
 	# against the first grounded one - exactly the transfer.
 	# Only meaningful while actually rolling; a wash-out drops to zero speed and the heading of a
 	# zero vector is not a direction.
 	if _landed:
 		_max_off_centre = maxf(_max_off_centre, _off_centre())
+	else:
+		# Last airborne reading is the settled baseline: the camera has had the whole flight to
+		# reach its resting framing, including the lateral slide.
+		_rest_off_centre = _off_centre()
 	var dir: float = _travel_dir()
 	if _skater.current_speed > 0.5:
 		_max_dir_step = maxf(_max_dir_step, absf(rad_to_deg(angle_difference(
@@ -220,10 +252,28 @@ func _off_centre() -> float:
 		return 0.0
 	return rad_to_deg((-cam.global_transform.basis.z).angle_to(to_skater.normalized()))
 
+## Component of travel across the board's rolling axis.
+func _lateral_speed() -> float:
+	var v := Vector3(_skater.velocity.x, 0.0, _skater.velocity.z)
+	var axis: Vector3 = -_skater.global_transform.basis.z
+	axis.y = 0.0
+	if axis.length_squared() < 0.0001:
+		return 0.0
+	axis = axis.normalized()
+	return (v - axis * v.dot(axis)).length()
+
 ## Heading of travel in world degrees. Undefined at a standstill, so callers must gate on speed.
 func _travel_dir() -> float:
 	var v := Vector2(_skater.velocity.x, _skater.velocity.z)
 	return rad_to_deg(v.angle()) if v.length_squared() > 0.0001 else _prev_dir
+
+## Signed angle between where the camera faces and the direction of travel. At rest this should sit
+## at +/- camera_side_offset_deg, its sign telling you which side the camera has chosen.
+func _cam_vs_travel() -> float:
+	var v := Vector2(_skater.velocity.x, _skater.velocity.z)
+	if v.length() < _skater.camera_travel_min_speed:
+		return 0.0
+	return rad_to_deg(angle_difference(atan2(-v.x, -v.y), deg_to_rad(_cam_yaw())))
 
 ## Board yaw in world terms: the rig's heading plus the deck's own switch-stance/spin yaw.
 func _board_yaw() -> float:
@@ -258,6 +308,21 @@ func _finish_case() -> void:
 		detail = "final %.2f m/s downhill" % _skater.velocity.z
 		if _skater.velocity.z < 1.0:
 			problems.append("expected to roll downhill, reached only %.2f m/s" % _skater.velocity.z)
+	elif c.get("expect_straighten", false):
+		var off: float = _travel_vs_board()
+		detail = "%d pushes | %.2f m/s | off %.1f deg | lateral %.2f peak vs %.2f start" % [
+			_pushes, speed, off, _max_lateral, _initial_lateral]
+		if _pushes < 3:
+			problems.append("test did not actually push")
+		# A push must never grow the sideways component. This is the assertion that distinguishes a
+		# directed drive from a rescale of the whole velocity vector.
+		if _max_lateral > _initial_lateral + 0.05:
+			problems.append("pushing amplified sideways speed %.2f -> %.2f" % [
+				_initial_lateral, _max_lateral])
+		if off > 2.0:
+			problems.append("still %.1f deg off the board axis - pushes are driving it crooked" % off)
+		if speed < 3.0:
+			problems.append("pushing failed to build speed: %.2f m/s" % speed)
 	elif c.get("expect_carve", false):
 		var turned: float = absf(rad_to_deg(angle_difference(
 			deg_to_rad(_start_heading), deg_to_rad(_skater.rotation_degrees.y))))
@@ -269,9 +334,20 @@ func _finish_case() -> void:
 		if _land_status.begins_with("BAIL"):
 			problems.append("carving should never wash out")
 	elif c.get("expect_reversal", false):
-		detail = "stalled then reached %.2f m/s downhill" % _skater.velocity.z
+		detail = "%.2f m/s downhill | camVsTravel %+.1f | camStep %.2f" % [
+			_skater.velocity.z, _cam_vs_travel(), _max_cam_step]
 		if not _reversed:
 			problems.append("expected to stall and roll back down, never reversed")
+		# THE bank-reversal requirement: once genuinely rolling back down, the camera must have
+		# swung round to chase, not sat there watching the skater approach.
+		if absf(_cam_vs_travel()) > _skater.camera_side_offset_deg + 3.0:
+			problems.append("camera did not swing round to chase: %.1f deg off travel" % _cam_vs_travel())
+		# And it must have swung toward the side the offset selects, at a paced rate.
+		if c.has("expect_swing_sign") and signf(_cam_vs_travel()) != float(c["expect_swing_sign"]):
+			problems.append("camera settled on the wrong side: %+.1f deg" % _cam_vs_travel())
+		if _max_cam_step > _skater.camera_max_swing_deg / 60.0 + 0.3:
+			problems.append("camera swung %.2f deg in one frame (limit %.2f)" % [
+				_max_cam_step, _skater.camera_max_swing_deg / 60.0])
 	else:
 		var bailed: bool = _land_status.begins_with("BAIL")
 		var drift: float = rad_to_deg(angle_difference(
@@ -293,15 +369,17 @@ func _finish_case() -> void:
 			problems.append("board world orientation jumped %.2f deg at touchdown" % _board_jump)
 		# The camera must spread the rig's jump over several frames, never inherit it whole.
 		if _residual > 1.0:
-			# The spring starts from rest, so the camera must never lurch on the contact frame. Peak
-			# angular velocity of a critically damped spring is omega * X0 / e.
-			var cap: float = _skater.camera_recenter_speed * _residual / (60.0 * exp(1.0)) + 0.3
+			# Rate limited: the camera may never swing faster than camera_max_swing_deg, whatever
+			# the provocation. Landings should barely move it at all now, since it tracks travel
+			# and travel does not jump at touchdown.
+			var cap: float = _skater.camera_max_swing_deg / 60.0 + 0.3
 			if _max_cam_step > cap:
-				problems.append("camera moved %.2f deg in one frame (spring peak %.2f)" % [
+				problems.append("camera moved %.2f deg in one frame (limit %.2f)" % [
 					_max_cam_step, cap])
-			if absf(rad_to_deg(angle_difference(deg_to_rad(_cam_yaw()),
-					deg_to_rad(_skater.rotation_degrees.y)))) > 0.5:
-				problems.append("camera never caught up to the rig")
+			# The camera settles behind TRAVEL, offset to the chosen side - not behind the rig.
+			if absf(_cam_vs_travel()) > _skater.camera_side_offset_deg + 2.0:
+				problems.append("camera settled %.1f deg off travel (expected ~%.0f)" % [
+					_cam_vs_travel(), _skater.camera_side_offset_deg])
 		if c.get("expect_bail", false) and not bailed:
 			problems.append("expected a wash-out, got \"%s\"" % _land_status)
 		if c.get("expect_landed", false):

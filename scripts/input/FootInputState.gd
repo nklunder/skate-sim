@@ -25,6 +25,13 @@ var left_angle: float = 0.0 # Radians via atan2(x, -y)
 var right_mag: float = 0.0
 var right_angle: float = 0.0
 var lean: float = 0.0 # RT - LT
+## Which side of the skater the chase camera sits on: +1 right, -1 left. Absolute, not a toggle -
+## d-pad right always picks the right-hand view - so what you get never depends on where you were.
+##
+## Named by SIDE rather than frontside/backside deliberately: which of the two shows the rider's
+## front depends on stance, so the stance-relative names would mean opposite things for a regular
+## and a goofy rider while the camera did exactly the same thing.
+var camera_side: int = 1
 var current_button_string: String = "None"
 
 # Push Detection & Stroke Classification
@@ -117,6 +124,13 @@ func _poll_inputs() -> void:
 	# Apply audio-log power curve (exponent 2.2) to desensitize light-to-mid trigger pulls while preserving full speed at 1.0
 	lean = signf(raw_lean) * pow(absf(raw_lean), 2.2)
 	
+	# Chase camera side select on the d-pad. Absolute rather than a toggle: pressing the same side
+	# twice is a no-op, so the view you get is never a function of the view you had.
+	if Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_LEFT) or Input.is_physical_key_pressed(KEY_BRACKETLEFT):
+		camera_side = -1
+	elif Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_RIGHT) or Input.is_physical_key_pressed(KEY_BRACKETRIGHT):
+		camera_side = 1
+
 	# Push Button polling (Joypad X/Square for Left Foot, A/Cross for Right Foot; V / B for keyboard)
 	var curr_push_left: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_X) or Input.is_physical_key_pressed(KEY_V)
 	var curr_push_right: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_A) or Input.is_physical_key_pressed(KEY_B)

@@ -104,7 +104,9 @@ func _start_case() -> void:
 		_spawn_ledge(CASES[_case]["ledge"])
 	_skater = _world.get_node("SkaterRig") as SkaterController
 	_skater.global_position = CASES[_case]["pos"]
-	_skater.current_speed = 7.0
+	# Set the vector directly: current_speed is read-only, precisely so nothing can assign a speed
+	# and have a direction silently inferred for it.
+	_skater.velocity = -_skater.global_transform.basis.z * 7.0
 	_frame = 0
 	_popped = false
 	_landed_frame = -1
