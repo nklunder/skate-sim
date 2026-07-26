@@ -8,8 +8,8 @@ enum PopState { NONE, LOADING_OLLIE, LOADING_NOLLIE, POPPED }
 @export var board_config: SkateBoardConfig
 
 @export_category("Shove-it Scoop Thresholds")
-@export var shuv_180_threshold_deg: float = 35.0
-@export var shuv_360_threshold_deg: float = 80.0
+@export var shuv_180_threshold_deg: float = 45.0 # Quarter-turn buffer window (45° to 134°)
+@export var shuv_360_threshold_deg: float = 135.0 # Half-turn buffer window (>= 135°)
 
 # Live Input Values
 var left_stick_raw: Vector2 = Vector2.ZERO
@@ -132,16 +132,17 @@ func _detect_pop_load_and_flick() -> void:
 			initial_scoop_angle = rad_to_deg(front_stick.angle())
 			max_swept_angle = 0.0
 			
-	# Measure total angular sweep (arc span) of the scooping thumbstick while loading pop
+	# Measure total angular sweep (arc span) and true rotational direction of the scooping thumbstick
 	if current_pop_state != PopState.NONE:
 		var active_scoop: Vector2 = back_stick if current_pop_state == PopState.LOADING_OLLIE else front_stick
 		if active_scoop.length() >= 0.30:
-			if absf(active_scoop.x) >= 0.20:
-				last_scoop_sign = -1.0 if active_scoop.x < 0.0 else 1.0
 			var curr_deg: float = rad_to_deg(active_scoop.angle())
-			var swept: float = absf(rad_to_deg(angle_difference(deg_to_rad(initial_scoop_angle), deg_to_rad(curr_deg))))
+			var signed_diff: float = rad_to_deg(angle_difference(deg_to_rad(initial_scoop_angle), deg_to_rad(curr_deg)))
+			var swept: float = absf(signed_diff)
 			if swept > max_swept_angle:
 				max_swept_angle = swept
+				if swept >= 15.0:
+					last_scoop_sign = -1.0 if signed_diff > 0.0 else 1.0
 	
 	# Execute Flick Pop from loaded states
 	if current_pop_state == PopState.LOADING_OLLIE and front_stick.length() >= 0.35 and front_stick.y <= 0.20:
@@ -199,13 +200,15 @@ func _evaluate_flip_combo() -> void:
 	elif Input.is_physical_key_pressed(KEY_X) or Input.is_physical_key_pressed(KEY_G):
 		active_flip_type = "Heelflip"
 		
+	# In Fakie stance, reverse the text label classification while preserving existing physical control-to-rotation behavior
+	if last_pop_type.contains("Fakie") and active_flip_type != "None":
+		active_flip_type = "Heelflip" if active_flip_type == "Kickflip" else "Kickflip"
+		
 	var is_360_shuv: bool = (max_swept_angle >= shuv_360_threshold_deg or Input.is_physical_key_pressed(KEY_H))
-	if is_360_shuv or (max_swept_angle >= shuv_180_threshold_deg or (scoop_stick.length() >= 0.35 and absf(scoop_stick.x) >= 0.35) or Input.is_physical_key_pressed(KEY_C)):
+	if is_360_shuv or (max_swept_angle >= shuv_180_threshold_deg or Input.is_physical_key_pressed(KEY_C)):
 		var scoop_is_left_foot: bool = not flick_is_left_foot
 		var is_frontside: bool = false
 		if not Input.is_physical_key_pressed(KEY_C) and not Input.is_physical_key_pressed(KEY_H):
-			if absf(scoop_stick.x) >= 0.20:
-				last_scoop_sign = -1.0 if scoop_stick.x < 0.0 else 1.0
 			if scoop_is_left_foot:
 				is_frontside = (last_scoop_sign < 0.0)
 			else:

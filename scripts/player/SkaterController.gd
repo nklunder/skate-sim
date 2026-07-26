@@ -101,8 +101,11 @@ func _physics_process(delta: float) -> void:
 		else:
 			board_pivot.rotation_degrees.x = 22.0 * stance_sign # Trailing tail pop
 			
-		# Configure BoardMesh flip & spin targets (Layer 3) with proper roll orientation for Switch/Fakie!
-		var roll_sign: float = stance_sign
+		# Configure BoardMesh flip & spin targets (Layer 3), decoupling from 180° deck yaw reversal and calibrating by stance
+		var deck_reversed: bool = cos(deg_to_rad(board_mesh.rotation_degrees.y)) < 0.0
+		var deck_orientation_comp: float = -1.0 if deck_reversed else 1.0
+		var stance_roll_sign: float = -1.0 if input_state.last_pop_type.contains("Nollie") else 1.0
+		var roll_sign: float = stance_roll_sign * deck_orientation_comp
 		if input_state.active_flip_type == "Kickflip":
 			target_board_roll = board_mesh.rotation_degrees.z + (360.0 * roll_sign)
 			is_flip_in_progress = true
@@ -113,7 +116,7 @@ func _physics_process(delta: float) -> void:
 			target_board_roll = board_mesh.rotation_degrees.z
 			
 		if input_state.active_spin_type != "None":
-			var spin_sign: float = -input_state.last_scoop_sign if (input_state.last_pop_type.contains("Nollie") or input_state.last_pop_type.contains("Fakie")) else input_state.last_scoop_sign
+			var spin_sign: float = input_state.last_scoop_sign
 			var is_360_spin: bool = (input_state.active_spin_type.begins_with("360") or input_state.last_combo_string.contains("360") or input_state.last_combo_string.contains("Laser"))
 			var spin_deg: float = 360.0 if is_360_spin else 180.0
 			target_board_yaw = board_mesh.rotation_degrees.y + (spin_deg * spin_sign)
