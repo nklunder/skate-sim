@@ -43,7 +43,7 @@ roughness = 0.7
 
 [sub_resource type="BoxMesh" id="BoxMesh_curb"]
 material = SubResource("StandardMaterial3D_curb")
-size = Vector3(8, 0.3, 1.2)
+size = Vector3(7.9971313, 0.3, 6.585791)
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_ramp"]
 size = Vector3(6, 0.2, 4)
@@ -122,12 +122,13 @@ shape = SubResource("BoxShape3D_ground")
 mesh = SubResource("BoxMesh_ground")
 
 [node name="Curb1" type="StaticBody3D" parent="." unique_id=128053216]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 4, 0.15, -6)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 4.0859365, 0.15, -4.9321375)
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Curb1" unique_id=1465034928]
 shape = SubResource("BoxShape3D_curb")
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Curb1" unique_id=1363362602]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.06680298, 0, 1.6421511)
 mesh = SubResource("BoxMesh_curb")
 
 [node name="Curb2" type="StaticBody3D" parent="." unique_id=1078698135]
@@ -214,6 +215,6 @@ transform = Transform3D(1, 0, 0, 0, 0.85379946, -0.52060235, 0, 0.52060235, 0.85
 mesh = SubResource("BoxMesh_platform_ramp")
 
 [node name="SkaterRig" parent="." unique_id=55770212 instance=ExtResource("1_rig")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.078, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.078, 6)
 
 [node name="DebugHUD" parent="." unique_id=651773893 instance=ExtResource("2_hud")]
