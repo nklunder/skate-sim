@@ -12,6 +12,7 @@ extends Control
 @onready var left_stick_lbl: Label = $Panel/VBoxContainer/LeftStickLabel
 @onready var right_stick_lbl: Label = $Panel/VBoxContainer/RightStickLabel
 @onready var lean_lbl: Label = $Panel/VBoxContainer/LeanLabel
+@onready var button_lbl: Label = $Panel/VBoxContainer/ButtonLabel
 @onready var stance_lbl: Label = $Panel/VBoxContainer/StanceLabel
 @onready var leading_lbl: RichTextLabel = $Panel/VBoxContainer/LeadingLabel
 @onready var trailing_lbl: RichTextLabel = $Panel/VBoxContainer/TrailingLabel
@@ -55,6 +56,7 @@ func _process(_delta: float) -> void:
 	left_stick_lbl.text = "Left Stick   | Mag: %.2f | Ang: %3.0f°" % [state.left_mag, rad_to_deg(state.left_angle)]
 	right_stick_lbl.text = "Right Stick | Mag: %.2f | Ang: %3.0f°" % [state.right_mag, rad_to_deg(state.right_angle)]
 	lean_lbl.text = "Trigger Spin (RT-LT): %.2f" % state.lean
+	button_lbl.text = "Button Pressed: %s" % state.current_button_string
 	stance_lbl.text = "Static Config Stance: %s" % ("REGULAR" if state.stance == state.Stance.REGULAR else "GOOFY")
 	# The HUD is the only place foot identity becomes text; logic elsewhere compares enum values.
 	var lead_color: String = "#3399e6" if state.leading_foot == FootInputState.Foot.LEFT else "#e64d4d"

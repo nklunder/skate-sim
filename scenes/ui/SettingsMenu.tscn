@@ -1,0 +1,88 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/SettingsMenu.gd" id="1_script"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_menu"]
+content_margin_left = 32.0
+content_margin_top = 24.0
+content_margin_right = 32.0
+content_margin_bottom = 24.0
+bg_color = Color(0.08, 0.1, 0.14, 0.96)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.3, 0.6, 0.9, 0.8)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[node name="SettingsMenu" type="CanvasLayer"]
+layer = 10
+process_mode = 3
+script = ExtResource("1_script")
+
+[node name="Overlay" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Backdrop" type="ColorRect" parent="Overlay"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.04, 0.06, 0.1, 0.85)
+
+[node name="CenterContainer" type="CenterContainer" parent="Overlay"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="MenuPanel" type="PanelContainer" parent="Overlay/CenterContainer"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_menu")
+
+[node name="VBox" type="VBoxContainer" parent="Overlay/CenterContainer/MenuPanel"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="TitleLabel" type="Label" parent="Overlay/CenterContainer/MenuPanel/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.3, 0.75, 1, 1)
+theme_override_font_sizes/font_size = 22
+text = "SETTINGS"
+horizontal_alignment = 1
+
+[node name="HSeparator1" type="HSeparator" parent="Overlay/CenterContainer/MenuPanel/VBox"]
+layout_mode = 2
+
+[node name="OptionsContainer" type="VBoxContainer" parent="Overlay/CenterContainer/MenuPanel/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="DebugHUDCheckBox" type="CheckBox" parent="Overlay/CenterContainer/MenuPanel/VBox/OptionsContainer"]
+layout_mode = 2
+focus_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Show Debug HUD"
+
+[node name="HSeparator2" type="HSeparator" parent="Overlay/CenterContainer/MenuPanel/VBox"]
+layout_mode = 2
+
+[node name="FooterLabel" type="Label" parent="Overlay/CenterContainer/MenuPanel/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.6, 0.7, 0.8, 1)
+theme_override_font_sizes/font_size = 14
+text = "Press START or B to Close  |  A to Toggle"
+horizontal_alignment = 1

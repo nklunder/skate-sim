@@ -61,3 +61,8 @@ Icon
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# ─────────────────────────────────────────────────────────────
+# AI Agent Local Directories & Metadata
+# ─────────────────────────────────────────────────────────────
+.agents/

@@ -3,6 +3,7 @@
 [ext_resource type="PackedScene" path="res://scenes/player/SkaterRig.tscn" id="1_rig"]
 [ext_resource type="PackedScene" path="res://scenes/ui/DebugHUD.tscn" id="2_hud"]
 [ext_resource type="Shader" uid="uid://23oq0xf0cyh5" path="res://resources/checkerboard.gdshader" id="3_shader"]
+[ext_resource type="PackedScene" path="res://scenes/ui/SettingsMenu.tscn" id="4_settings"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_world"]
 sky_top_color = Color(0.35, 0.5, 0.7, 1)
@@ -219,3 +220,5 @@ mesh = SubResource("BoxMesh_platform_ramp")
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.078, 6)
 
 [node name="DebugHUD" parent="." unique_id=651773893 instance=ExtResource("2_hud")]
+
+[node name="SettingsMenu" parent="." unique_id=741882991 instance=ExtResource("4_settings")]

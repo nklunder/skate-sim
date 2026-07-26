@@ -25,6 +25,7 @@ var left_angle: float = 0.0 # Radians via atan2(x, -y)
 var right_mag: float = 0.0
 var right_angle: float = 0.0
 var lean: float = 0.0 # RT - LT
+var current_button_string: String = "None"
 
 # Push Detection & Stroke Classification
 var push_left_triggered: bool = false
@@ -136,6 +137,38 @@ func _poll_inputs() -> void:
 		_set_pop(TrickSignature.Pop.OLLIE)
 		_build_trick_signature()
 	_prev_space_pressed = curr_space
+	
+	# Poll all controller buttons to aid telemetry and button remapping
+	var pressed_btns: Array[String] = []
+	for btn_idx in 64:
+		if Input.is_joy_button_pressed(0, btn_idx):
+			pressed_btns.append(_get_joy_button_name(btn_idx))
+	current_button_string = "None" if pressed_btns.is_empty() else ", ".join(pressed_btns)
+
+func _get_joy_button_name(btn: int) -> String:
+	match btn:
+		JOY_BUTTON_A: return "0 (A / Cross)"
+		JOY_BUTTON_B: return "1 (B / Circle)"
+		JOY_BUTTON_X: return "2 (X / Square)"
+		JOY_BUTTON_Y: return "3 (Y / Triangle)"
+		JOY_BUTTON_BACK: return "4 (Back / Select / Share)"
+		JOY_BUTTON_GUIDE: return "5 (Guide / PS / Home)"
+		JOY_BUTTON_START: return "6 (Start / Options)"
+		JOY_BUTTON_LEFT_STICK: return "7 (L3 / Left Stick)"
+		JOY_BUTTON_RIGHT_STICK: return "8 (R3 / Right Stick)"
+		JOY_BUTTON_LEFT_SHOULDER: return "9 (L1 / Left Bumper)"
+		JOY_BUTTON_RIGHT_SHOULDER: return "10 (R1 / Right Bumper)"
+		JOY_BUTTON_DPAD_UP: return "11 (D-Pad Up)"
+		JOY_BUTTON_DPAD_DOWN: return "12 (D-Pad Down)"
+		JOY_BUTTON_DPAD_LEFT: return "13 (D-Pad Left)"
+		JOY_BUTTON_DPAD_RIGHT: return "14 (D-Pad Right)"
+		JOY_BUTTON_MISC1: return "15 (Misc 1 / Share / Mic)"
+		JOY_BUTTON_PADDLE1: return "16 (Paddle 1 / Upper Right)"
+		JOY_BUTTON_PADDLE2: return "17 (Paddle 2 / Upper Left)"
+		JOY_BUTTON_PADDLE3: return "18 (Paddle 3 / Lower Right)"
+		JOY_BUTTON_PADDLE4: return "19 (Paddle 4 / Lower Left)"
+		JOY_BUTTON_TOUCHPAD: return "20 (Touchpad Click)"
+		_: return "%d (Raw Button)" % btn
 
 func _detect_pop_load_and_flick() -> void:
 	if current_pop_state == PopState.POPPED:
