@@ -16,6 +16,7 @@ extends Control
 @onready var leading_lbl: Label = $Panel/VBoxContainer/LeadingLabel
 @onready var trailing_lbl: Label = $Panel/VBoxContainer/TrailingLabel
 @onready var mesh_lbl: Label = $Panel/VBoxContainer/MeshUnderFootLabel
+@onready var sig_lbl: Label = $Panel/VBoxContainer/SignatureLabel
 
 func _ready() -> void:
 	if not skater_controller:
@@ -45,3 +46,5 @@ func _process(_delta: float) -> void:
 	leading_lbl.text = "Live Leading Foot: %s" % state.leading_foot
 	trailing_lbl.text = "Live Trailing Foot: %s" % state.trailing_foot
 	mesh_lbl.text = "Mesh Under Foot: L->[%s] | R->[%s]" % [state.left_foot_over, state.right_foot_over]
+	# Paste these values straight into TrickNames.TABLE to name the trick you just landed.
+	sig_lbl.text = "Signature: %s" % state.last_trick_signature

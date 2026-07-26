@@ -20,6 +20,12 @@ var target_board_roll: float = 0.0
 var target_board_yaw: float = 0.0
 var current_aerial_spin_rate: float = 0.0
 var is_flip_in_progress: bool = false
+## Raw world body yaw accumulated between pop and touchdown. Rider-normalised only when it is
+## folded into the trick signature, so this stays comparable with board_pivot.rotation_degrees.y.
+var airborne_body_yaw_deg: float = 0.0
+## Whether the rider was riding reversed (switch / fakie) at the moment of the pop. Sampled from
+## the pivot's real yaw rather than inferred, and captured at pop because the yaw changes in flight.
+var pop_riding_reversed: bool = false
 
 @onready var input_state: FootInputState = $FootInputState
 @onready var board_pivot: Node3D = $BoardPivot
@@ -102,32 +108,36 @@ func _physics_process(delta: float) -> void:
 		is_grounded = false
 		input_state.pop_impulse_triggered = false
 		
+		airborne_body_yaw_deg = 0.0
+		# Same idiom as deck_reversed below: read the orientation instead of inferring it.
+		pop_riding_reversed = cos(deg_to_rad(board_pivot.rotation_degrees.y)) < 0.0
+		var sig: TrickSignature = input_state.current_trick
+
 		# Initial kicktail pitch angle and flip roll sign upon popping (inverted in Switch/Fakie where Y == 180!)
 		var stance_sign: float = -1.0 if (not input_state.leading_foot.begins_with("Left")) else 1.0
-		if input_state.last_pop_type.contains("Nollie") or input_state.last_pop_type.contains("Fakie"):
+		if sig.pop == TrickSignature.Pop.NOLLIE or sig.pop == TrickSignature.Pop.FAKIE_OLLIE:
 			board_pivot.rotation_degrees.x = -22.0 * stance_sign # Leading nose pop
 		else:
 			board_pivot.rotation_degrees.x = 22.0 * stance_sign # Trailing tail pop
-			
+
 		# Configure BoardMesh flip & spin targets (Layer 3), decoupling from 180° deck yaw reversal and calibrating by stance
 		var deck_reversed: bool = cos(deg_to_rad(board_mesh.rotation_degrees.y)) < 0.0
 		var deck_orientation_comp: float = -1.0 if deck_reversed else 1.0
-		var stance_roll_sign: float = -1.0 if input_state.last_pop_type.contains("Nollie") else 1.0
+		var stance_roll_sign: float = -1.0 if sig.pop == TrickSignature.Pop.NOLLIE else 1.0
 		var roll_sign: float = stance_roll_sign * deck_orientation_comp
-		if input_state.active_flip_type == "Kickflip":
+		if sig.flip == TrickSignature.Flip.KICK:
 			target_board_roll = board_mesh.rotation_degrees.z + (360.0 * roll_sign)
 			is_flip_in_progress = true
-		elif input_state.active_flip_type == "Heelflip":
+		elif sig.flip == TrickSignature.Flip.HEEL:
 			target_board_roll = board_mesh.rotation_degrees.z - (360.0 * roll_sign)
 			is_flip_in_progress = true
 		else:
 			target_board_roll = board_mesh.rotation_degrees.z
-			
-		if input_state.active_spin_type != "None":
-			var spin_sign: float = input_state.last_scoop_sign
-			var is_360_spin: bool = (input_state.active_spin_type.begins_with("360") or input_state.last_combo_string.contains("360") or input_state.last_combo_string.contains("Laser"))
-			var spin_deg: float = 360.0 if is_360_spin else 180.0
-			target_board_yaw = board_mesh.rotation_degrees.y + (spin_deg * spin_sign)
+
+		# Spin magnitude comes from the measured signature, never from the display name.
+		if sig.shuv_deg != 0:
+			var spin_deg: float = 360.0 if absi(sig.shuv_deg) == 360 else 180.0
+			target_board_yaw = board_mesh.rotation_degrees.y + (spin_deg * input_state.last_scoop_sign)
 			is_flip_in_progress = true
 		else:
 			target_board_yaw = board_mesh.rotation_degrees.y
@@ -143,13 +153,15 @@ func _physics_process(delta: float) -> void:
 		current_aerial_spin_rate = lerpf(current_aerial_spin_rate, target_spin, 20.0 * delta)
 		if abs(current_aerial_spin_rate) > 0.1:
 			board_pivot.rotation_degrees.y -= current_aerial_spin_rate * delta
+			airborne_body_yaw_deg -= current_aerial_spin_rate * delta
 		
 		# Layer 2: Mid-Air Pitch Control (0.20 to 1.00 thumbsticks to angle nose/tail in air)
 		_apply_airborne_board_pitch(delta)
 		
 		# Layer 3: Deck Flip & Spin Authority on BoardMesh with Shoe Hover Catching
 		if is_flip_in_progress:
-			var active_spin_vel: float = spin_speed_deg * 2.0 if absf(target_board_yaw - board_mesh.rotation_degrees.y) > 185.0 or (input_state.active_spin_type.begins_with("360") or input_state.last_combo_string.contains("360") or input_state.last_combo_string.contains("Laser")) else spin_speed_deg
+			var is_360_spin: bool = absi(input_state.current_trick.shuv_deg) == 360
+			var active_spin_vel: float = spin_speed_deg * 2.0 if absf(target_board_yaw - board_mesh.rotation_degrees.y) > 185.0 or is_360_spin else spin_speed_deg
 			board_mesh.rotation_degrees.z = move_toward(board_mesh.rotation_degrees.z, target_board_roll, flip_speed_deg * delta)
 			board_mesh.rotation_degrees.y = move_toward(board_mesh.rotation_degrees.y, target_board_yaw, active_spin_vel * delta)
 			
@@ -162,7 +174,7 @@ func _physics_process(delta: float) -> void:
 				is_flip_in_progress = false
 				board_mesh.rotation_degrees.z = fmod(board_mesh.rotation_degrees.z, 360.0)
 				board_mesh.rotation_degrees.y = fmod(board_mesh.rotation_degrees.y, 360.0)
-				input_state.trick_status_string = "Caught %s in mid-air!" % input_state.last_combo_string
+				input_state.trick_status_string = "Caught in mid-air!"
 		else:
 			# Return shoe boxes to ride rest height when trick is caught or no flip active
 			left_foot.position.y = lerpf(left_foot.position.y, left_foot_rest.y, 16.0 * delta)
@@ -184,6 +196,9 @@ func _physics_process(delta: float) -> void:
 	# 8. Grounded Board Rotations & Middle-Zone Manuals (only when on pavement)
 	if is_grounded:
 		_apply_grounded_board_pitch(delta)
+		if active_push_foot == "":
+			left_foot.position = left_foot_rest
+			right_foot.position = right_foot_rest
 
 func _apply_airborne_board_pitch(delta: float) -> void:
 	var target_pitch_deg: float = 0.0
@@ -201,7 +216,21 @@ func _apply_airborne_board_pitch(delta: float) -> void:
 	
 	board_pivot.rotation_degrees.x = lerpf(board_pivot.rotation_degrees.x, target_pitch_deg, 14.0 * delta)
 
+## Folds the body rotation that just happened into the trick signature and resolves its name.
+## Called only on successful landings - a bail leaves the previous landed trick on display.
+func _finalise_trick_name() -> void:
+	var sig: TrickSignature = input_state.current_trick
+	var half_turns: int = int(round(airborne_body_yaw_deg / 180.0))
+	sig.body_deg = half_turns * 180 * TrickSignature.body_sign(
+		input_state.stance == FootInputState.Stance.GOOFY, pop_riding_reversed)
+	input_state.last_combo_string = TrickNames.resolve(sig)
+	input_state.last_trick_signature = sig.describe()
+
 func _evaluate_touchdown_landing() -> void:
+	# Firmly seat shoes onto deck rest coordinates immediately upon ground contact
+	left_foot.position = left_foot_rest
+	right_foot.position = right_foot_rest
+	
 	# Primo / Incomplete Flip Check
 	if is_flip_in_progress:
 		input_state.trick_status_string = "BAIL! (Primo Crash / Incomplete Flip)"
@@ -209,8 +238,6 @@ func _evaluate_touchdown_landing() -> void:
 		board_mesh.rotation_degrees.z = 0.0
 		board_mesh.rotation_degrees.y = 0.0
 		is_flip_in_progress = false
-		left_foot.position.y = left_foot_rest.y
-		right_foot.position.y = right_foot_rest.y
 		manual_timer = 0.0
 		return
 		
@@ -249,6 +276,7 @@ func _evaluate_touchdown_landing() -> void:
 	
 	if in_manual_zone:
 		# INSTANT MANUAL CATCH: bypass loading delay and continue rolling smoothly!
+		_finalise_trick_name()
 		input_state.trick_status_string = "Landed directly into Manual!"
 		manual_timer = manual_entry_delay # Instant loading buffer
 	elif abs(pitch) > max_landing_tolerance_deg:
@@ -259,7 +287,8 @@ func _evaluate_touchdown_landing() -> void:
 		manual_timer = 0.0
 	else:
 		# CLEAN LANDING: within tolerances
-		input_state.trick_status_string = "Clean Touchdown & Rolling"
+		_finalise_trick_name()
+		input_state.trick_status_string = "Landed %s!" % input_state.last_combo_string
 		manual_timer = 0.0
 
 func _apply_grounded_board_pitch(delta: float) -> void:

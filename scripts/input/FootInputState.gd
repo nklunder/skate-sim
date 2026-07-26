@@ -31,7 +31,11 @@ var last_push_type: String = "None"
 var current_pop_state: PopState = PopState.NONE
 var trick_status_string: String = "Grounded"
 var pop_impulse_triggered: bool = false
-var last_pop_type: String = "None"
+var last_pop_type: String = "None" # Display only. Logic reads current_trick.pop.
+var last_pop: TrickSignature.Pop = TrickSignature.Pop.OLLIE
+## Measurement of the trick in progress. Populated at pop with pop/flip/shuv; SkaterController
+## fills in body_deg at touchdown, once the body rotation has actually happened.
+var current_trick: TrickSignature = TrickSignature.new()
 var active_flip_type: String = "None"
 var active_spin_type: String = "None"
 var last_scoop_sign: float = -1.0
@@ -40,6 +44,9 @@ var max_swept_angle: float = 0.0
 var accumulated_scoop_deg: float = 0.0
 var _last_frame_scoop_angle: float = 0.0
 var last_combo_string: String = "None"
+## Readout of the last landed trick's measured signature, shown on the HUD so table rows can be
+## authored by observation rather than by reasoning about rotation conventions.
+var last_trick_signature: String = "-"
 var _prev_space_pressed: bool = false
 
 # Live Facts
@@ -107,8 +114,8 @@ func _poll_inputs() -> void:
 	if curr_space and not _prev_space_pressed and current_pop_state != PopState.POPPED:
 		pop_impulse_triggered = true
 		current_pop_state = PopState.POPPED
-		last_pop_type = "Ollie"
-		_evaluate_flip_combo()
+		_set_pop(TrickSignature.Pop.OLLIE)
+		_build_trick_signature()
 	_prev_space_pressed = curr_space
 
 func _detect_pop_load_and_flick() -> void:
@@ -158,18 +165,18 @@ func _detect_pop_load_and_flick() -> void:
 		current_pop_state = PopState.POPPED
 		# Differentiate Switch vs Regular Ollie based on profile stance vs live orientation
 		if (stance == Stance.REGULAR and not left_is_front) or (stance == Stance.GOOFY and left_is_front):
-			last_pop_type = "Switch Ollie"
+			_set_pop(TrickSignature.Pop.SWITCH_OLLIE)
 		else:
-			last_pop_type = "Ollie"
-		_evaluate_flip_combo()
+			_set_pop(TrickSignature.Pop.OLLIE)
+		_build_trick_signature()
 	elif current_pop_state == PopState.LOADING_NOLLIE and back_stick.length() >= 0.35 and back_stick.y >= -0.20:
 		pop_impulse_triggered = true
 		current_pop_state = PopState.POPPED
 		if (stance == Stance.REGULAR and not left_is_front) or (stance == Stance.GOOFY and left_is_front):
-			last_pop_type = "Fakie Ollie"
+			_set_pop(TrickSignature.Pop.FAKIE_OLLIE)
 		else:
-			last_pop_type = "Nollie"
-		_evaluate_flip_combo()
+			_set_pop(TrickSignature.Pop.NOLLIE)
+		_build_trick_signature()
 	
 	# Reset to None if sticks return to neutral without flicking
 	if right_stick_raw.length() < 0.20 and left_stick_raw.length() < 0.20 and current_pop_state != PopState.NONE:
@@ -177,16 +184,26 @@ func _detect_pop_load_and_flick() -> void:
 		max_swept_angle = 0.0
 		trick_status_string = "Grounded & Rolling"
 
-func _evaluate_flip_combo() -> void:
+func _set_pop(p: TrickSignature.Pop) -> void:
+	last_pop = p
+	last_pop_type = ["Ollie", "Nollie", "Switch Ollie", "Fakie Ollie"][p]
+
+## Measures what the player just did into `current_trick`. Body rotation is NOT known yet - it
+## happens during flight - so SkaterController fills body_deg in at touchdown and resolves the name
+## there. Nothing here builds a display string; naming lives entirely in TrickNames.gd.
+func _build_trick_signature() -> void:
 	active_flip_type = "None"
 	active_spin_type = "None"
-	
+
+	var sig := TrickSignature.new()
+	sig.pop = last_pop
+
 	var left_is_front: bool = leading_foot.begins_with("Left")
 	var flick_stick: Vector2
 	var scoop_stick: Vector2
 	var flick_is_left_foot: bool
 	
-	if last_pop_type.contains("Nollie") or last_pop_type.contains("Fakie"):
+	if last_pop == TrickSignature.Pop.NOLLIE or last_pop == TrickSignature.Pop.FAKIE_OLLIE:
 		# In a Nollie or Fakie Ollie pop, the TRAILING foot is the flicking foot
 		flick_stick = right_stick_raw if left_is_front else left_stick_raw
 		scoop_stick = left_stick_raw if left_is_front else right_stick_raw
@@ -208,54 +225,31 @@ func _evaluate_flip_combo() -> void:
 	elif Input.is_physical_key_pressed(KEY_X) or Input.is_physical_key_pressed(KEY_G):
 		active_flip_type = "Heelflip"
 		
-	# In Fakie stance, reverse the text label classification while preserving existing physical control-to-rotation behavior
-	if last_pop_type.contains("Fakie") and active_flip_type != "None":
+	# In Fakie stance the flicking foot swaps ends, so the physical flick maps to the opposite deck
+	# roll. Mirror the classification to keep control-to-rotation behaviour unchanged.
+	if last_pop == TrickSignature.Pop.FAKIE_OLLIE and active_flip_type != "None":
 		active_flip_type = "Heelflip" if active_flip_type == "Kickflip" else "Kickflip"
-		
+
+	match active_flip_type:
+		"Kickflip": sig.flip = TrickSignature.Flip.KICK
+		"Heelflip": sig.flip = TrickSignature.Flip.HEEL
+		_: sig.flip = TrickSignature.Flip.NONE
+
 	var is_360_shuv: bool = (max_swept_angle >= shuv_360_threshold_deg or Input.is_physical_key_pressed(KEY_H))
 	if is_360_shuv or (max_swept_angle >= shuv_180_threshold_deg or Input.is_physical_key_pressed(KEY_C)):
-		var scoop_is_left_foot: bool = not flick_is_left_foot
-		var is_frontside: bool = false
-		if not Input.is_physical_key_pressed(KEY_C) and not Input.is_physical_key_pressed(KEY_H):
-			if scoop_is_left_foot:
-				is_frontside = (last_scoop_sign < 0.0)
-			else:
-				is_frontside = (last_scoop_sign > 0.0)
-		else:
+		if Input.is_physical_key_pressed(KEY_C) or Input.is_physical_key_pressed(KEY_H):
 			last_scoop_sign = -1.0
-			
-		if is_360_shuv:
-			active_spin_type = "360 FS Pop Shove-it" if is_frontside else "360 Pop Shove-it"
-		else:
-			active_spin_type = "FS Pop Shove-it" if is_frontside else "Pop Shove-it"
-		
-	# Construct combo trick description with authentic 360 Flip / Laser Flip nomenclature
-	var combo_prefix: String = "Fakie" if last_pop_type == "Fakie Ollie" else last_pop_type
-	var body: String = ""
-	if active_spin_type.begins_with("360"):
-		var is_fs_360: bool = active_spin_type.contains("FS")
-		if active_flip_type == "Kickflip":
-			body = "360 FS Flip" if is_fs_360 else "360 Flip"
-		elif active_flip_type == "Heelflip":
-			body = "Laser Flip" if is_fs_360 else "360 Heelflip"
-		else:
-			body = active_spin_type
-	elif active_spin_type != "None" and active_flip_type != "None":
-		var spin_word: String = "FS Varial" if active_spin_type.begins_with("FS") else "Varial"
-		body = spin_word + " " + active_flip_type
-	elif active_flip_type != "None":
-		body = active_flip_type
-	elif active_spin_type != "None":
-		body = active_spin_type
-	else:
-		body = ""
-		
-	if body != "":
-		last_combo_string = (combo_prefix + " " + body).strip_edges() if last_pop_type != "Ollie" else body
-	else:
-		last_combo_string = last_pop_type
-		
-	trick_status_string = "Airborne: %s!" % last_combo_string
+		# `last_scoop_sign` is the RAW thumbstick sweep direction, and stays raw for the physical
+		# rotation SkaterController applies. Converting it to the rider's frame for naming is
+		# TrickSignature.shuv_sign()'s job - see the frame table there.
+		var magnitude: int = 360 if is_360_shuv else 180
+		sig.shuv_deg = int(magnitude * last_scoop_sign) \
+			* TrickSignature.shuv_sign(stance == Stance.GOOFY, not flick_is_left_foot)
+		active_spin_type = "%d Shove-it" % magnitude # Display only.
+
+	current_trick = sig
+	# Name is resolved at touchdown, once the body rotation has actually happened.
+	trick_status_string = "Airborne"
 
 
 func _update_polar_decomposition() -> void:
