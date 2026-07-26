@@ -157,6 +157,7 @@
 - [x] **Dynamic Push Stroke Stance Alignment:** Resolved an issue where both feet touched down on the wrong side of the deck during Goofy stance pushes. Replaced hardcoded left/right shoe reach directions in `_animate_foot_push_stroke` with dynamic alignment checking `input_state.leading_foot`: across all stances (Regular Forward, Goofy Forward, Switch, and Fakie), Standard Pushes (using the trailing foot) consistently step off onto the front toe side ($+X$), while Mongo Pushes (using the leading foot) reach out to the rear heel side ($-X$).
 - [x] **Spawn Position Clearance Adjustment:** Relocated the default starting transform of `SkaterRig` in `TestWorld.tscn` from `(0, 0.078, 0)` to `(0, 0.078, 6)` along the Z-axis, moving it out of overlap with `Curb1` and giving an open 6-meter approach run toward the central skate obstacles.
 - [x] **Standalone GLB Asset Migration:** Exported `res://skateboard.glb` directly from `skateboard.blend` via Blender CLI and updated `SkateDeckMesh.gd` to preload the native `.glb` file. This eliminates the requirement for external Blender installations when opening the source project in Godot without an imported cache.
+- [x] **TestWorld Collision Shape Alignment:** Updated `BoxShape3D_curb` size and `Curb1/CollisionShape3D` transform in `TestWorld.tscn` to precisely match their corresponding mesh dimensions (`Vector3(7.9971313, 0.3, 6.585791)`) and transform offsets (`(-0.06680298, 0, 1.6421511)`), ensuring physical collision surfaces accurately match visual mesh geometry without altering mesh shapes.
 
 ---
 
