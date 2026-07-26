@@ -41,7 +41,7 @@ board_config = ExtResource("3_config")
 script = ExtResource("4_deck_mesh")
 
 [node name="LeftFoot" type="MeshInstance3D" parent="BoardPivot"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.055, -0.25)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.025, 0.055, -0.25)
 mesh = SubResource("BoxMesh_foot")
 surface_material_override/0 = SubResource("StandardMaterial3D_foot_l")
 
@@ -59,7 +59,7 @@ mesh = SubResource("CylinderMesh_peg")
 surface_material_override/0 = SubResource("StandardMaterial3D_peg")
 
 [node name="RightFoot" type="MeshInstance3D" parent="BoardPivot"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.055, 0.25)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.025, 0.055, 0.25)
 mesh = SubResource("BoxMesh_foot")
 surface_material_override/0 = SubResource("StandardMaterial3D_foot_r")
 

@@ -1,3 +1,63 @@
-# Godot 4+ specific ignores
+# ─────────────────────────────────────────────────────────────
+# Godot 4+
+# ─────────────────────────────────────────────────────────────
+
+# Import cache and generated engine data. Large and fully rebuildable:
+# skateboard.blend alone expands to a 22.7 MB .scn plus a 25.9 MB .bin here.
 .godot/
+
+# Godot-generated Android build template
 /android/
+
+# NOTE: *.import and *.uid files are deliberately NOT ignored. Godot 4 needs them
+# committed — .import carries per-asset import settings, .uid pins the resource ID
+# that scenes and scripts reference. Ignoring either breaks the project for everyone
+# else on checkout, and is a common mistake carried over from Godot 3 gitignores.
+
+# Exported builds
+/build/
+/builds/
+/export/
+*.pck
+*.zip
+
+# Export presets can hold keystore paths and signing passwords. Delete this line if
+# you'd rather share export configuration with the team.
+export_presets.cfg
+
+# Imported translations (regenerated from source CSVs)
+*.translation
+
+# Mono / C#
+.mono/
+data_*/
+mono_crash.*.json
+
+# ─────────────────────────────────────────────────────────────
+# macOS
+# ─────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Finder custom folder icon
+Icon
+
+# Thumbnails and resource forks
+._*
+
+# Files that may appear in the root of a volume
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Directories potentially created on remote AFP shares
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk

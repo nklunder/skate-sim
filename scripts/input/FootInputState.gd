@@ -8,8 +8,8 @@ enum PopState { NONE, LOADING_OLLIE, LOADING_NOLLIE, POPPED }
 @export var board_config: SkateBoardConfig
 
 @export_category("Shove-it Scoop Thresholds")
-@export var shuv_180_threshold_deg: float = 45.0 # Quarter-turn buffer window (45° to 134°)
-@export var shuv_360_threshold_deg: float = 135.0 # Half-turn buffer window (>= 135°)
+@export var shuv_180_threshold_deg: float = 40.0 # Standard scoop buffer window (40° to 94°)
+@export var shuv_360_threshold_deg: float = 95.0 # Deep scoop buffer window (>= 95°)
 
 # Live Input Values
 var left_stick_raw: Vector2 = Vector2.ZERO
@@ -37,6 +37,8 @@ var active_spin_type: String = "None"
 var last_scoop_sign: float = -1.0
 var initial_scoop_angle: float = 0.0
 var max_swept_angle: float = 0.0
+var accumulated_scoop_deg: float = 0.0
+var _last_frame_scoop_angle: float = 0.0
 var last_combo_string: String = "None"
 var _prev_space_pressed: bool = false
 
@@ -124,25 +126,31 @@ func _detect_pop_load_and_flick() -> void:
 			current_pop_state = PopState.LOADING_OLLIE
 			trick_status_string = "Loading Ollie (Tail)"
 			initial_scoop_angle = rad_to_deg(back_stick.angle())
+			_last_frame_scoop_angle = initial_scoop_angle
+			accumulated_scoop_deg = 0.0
 			max_swept_angle = 0.0
 		# Nollie / Switch Nollie Load (Leading front foot pushed up in upper hemisphere)
 		elif front_stick.length() >= 0.70 and front_stick.y <= -0.50:
 			current_pop_state = PopState.LOADING_NOLLIE
 			trick_status_string = "Loading Nollie (Nose)"
 			initial_scoop_angle = rad_to_deg(front_stick.angle())
+			_last_frame_scoop_angle = initial_scoop_angle
+			accumulated_scoop_deg = 0.0
 			max_swept_angle = 0.0
 			
-	# Measure total angular sweep (arc span) and true rotational direction of the scooping thumbstick
+	# Measure total angular sweep (arc span) and true rotational direction via frame delta accumulation to prevent circle-wrap bugs
 	if current_pop_state != PopState.NONE:
 		var active_scoop: Vector2 = back_stick if current_pop_state == PopState.LOADING_OLLIE else front_stick
 		if active_scoop.length() >= 0.30:
 			var curr_deg: float = rad_to_deg(active_scoop.angle())
-			var signed_diff: float = rad_to_deg(angle_difference(deg_to_rad(initial_scoop_angle), deg_to_rad(curr_deg)))
-			var swept: float = absf(signed_diff)
+			var frame_delta: float = rad_to_deg(angle_difference(deg_to_rad(_last_frame_scoop_angle), deg_to_rad(curr_deg)))
+			_last_frame_scoop_angle = curr_deg
+			accumulated_scoop_deg += frame_delta
+			var swept: float = absf(accumulated_scoop_deg)
 			if swept > max_swept_angle:
 				max_swept_angle = swept
 				if swept >= 15.0:
-					last_scoop_sign = -1.0 if signed_diff > 0.0 else 1.0
+					last_scoop_sign = -1.0 if accumulated_scoop_deg > 0.0 else 1.0
 	
 	# Execute Flick Pop from loaded states
 	if current_pop_state == PopState.LOADING_OLLIE and front_stick.length() >= 0.35 and front_stick.y <= 0.20:

@@ -39,15 +39,23 @@ var is_flip_in_progress: bool = false
 @export var max_push_speed: float = 7.0
 @export var push_impulse: float = 2.0
 @export var rolling_friction: float = 1.0
+@export var peg_tilt_deg: float = 35.0 # Max ankle peg lean at full stick deflection
 var velocity: Vector3 = Vector3.ZERO
 var current_speed: float = 0.0
 
-# Foot Push Animation State (Elevated to Y = 0.055 to prevent board collisions)
-var left_foot_rest: Vector3 = Vector3(0, 0.055, -0.25)
-var right_foot_rest: Vector3 = Vector3(0, 0.055, 0.25)
+# Foot Push Animation State (Elevated to Y = 0.055 to prevent board collisions).
+# Rest poses are captured from SkaterRig.tscn in _ready() so foot placement has exactly one
+# source of truth; hardcoding them here silently reverted any offset set in the scene as soon
+# as a push stroke finished.
+var left_foot_rest: Vector3 = Vector3(-0.025, 0.055, -0.25)
+var right_foot_rest: Vector3 = Vector3(-0.025, 0.055, 0.25)
 var active_push_foot: String = ""
 var push_anim_time: float = 0.0
 var push_anim_duration: float = 0.25
+
+func _ready() -> void:
+	left_foot_rest = left_foot.position
+	right_foot_rest = right_foot.position
 
 func _physics_process(delta: float) -> void:
 	# 1. Grounded vs Airborne evaluation
@@ -302,14 +310,24 @@ func _animate_foot_push_stroke(delta: float) -> void:
 				right_foot.position = right_foot_rest + Vector3(lateral_reach, vertical_dip, longitudinal_sweep)
 
 func _animate_ankle_pegs(delta: float) -> void:
-	if input_state.left_mag > 0.05:
-		left_peg_pivot.rotation_degrees.x = lerpf(left_peg_pivot.rotation_degrees.x, input_state.left_stick_raw.y * 35.0, 16.0 * delta)
-		left_peg_pivot.rotation_degrees.z = lerpf(left_peg_pivot.rotation_degrees.z, -input_state.left_stick_raw.x * 35.0, 16.0 * delta)
-	else:
-		left_peg_pivot.rotation = left_peg_pivot.rotation.lerp(Vector3.ZERO, 16.0 * delta)
-		
-	if input_state.right_mag > 0.05:
-		right_peg_pivot.rotation_degrees.x = lerpf(right_peg_pivot.rotation_degrees.x, input_state.right_stick_raw.y * 35.0, 16.0 * delta)
-		right_peg_pivot.rotation_degrees.z = lerpf(right_peg_pivot.rotation_degrees.z, -input_state.right_stick_raw.x * 35.0, 16.0 * delta)
-	else:
-		right_peg_pivot.rotation = right_peg_pivot.rotation.lerp(Vector3.ZERO, 16.0 * delta)
+	# Each PegPivot hangs under BoardPivot, which yaws to 180 deg in Switch/Fakie while
+	# CameraPivot (parented to SkaterRoot) stays put. Driving the tilt directly in pivot-local
+	# degrees therefore mirrored the pegs in switch, so stick-down read as up and left as right.
+	# Rotating the stick vector out of screen space and into the pivot's frame keeps the pegs
+	# pointing the way the physical stick is actually pushed at ANY yaw, so they stay honest
+	# part-way through an aerial spin too, not just at 0 deg and 180 deg.
+	var yaw: float = board_pivot.rotation.y
+	var yaw_cos: float = cos(yaw)
+	var yaw_sin: float = sin(yaw)
+	_drive_ankle_peg(left_peg_pivot, input_state.left_stick_raw, input_state.left_mag, yaw_cos, yaw_sin, delta)
+	_drive_ankle_peg(right_peg_pivot, input_state.right_stick_raw, input_state.right_mag, yaw_cos, yaw_sin, delta)
+
+func _drive_ankle_peg(pivot: Node3D, stick: Vector2, mag: float, yaw_cos: float, yaw_sin: float, delta: float) -> void:
+	if mag <= 0.05:
+		pivot.rotation = pivot.rotation.lerp(Vector3.ZERO, 16.0 * delta)
+		return
+	# Screen-space stick (x = right, y = toward the camera) resolved onto the pivot's local axes.
+	var local_x: float = stick.x * yaw_cos - stick.y * yaw_sin
+	var local_z: float = stick.x * yaw_sin + stick.y * yaw_cos
+	pivot.rotation_degrees.x = lerpf(pivot.rotation_degrees.x, local_z * peg_tilt_deg, 16.0 * delta)
+	pivot.rotation_degrees.z = lerpf(pivot.rotation_degrees.z, -local_x * peg_tilt_deg, 16.0 * delta)
