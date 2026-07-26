@@ -3,6 +3,12 @@ extends Node
 
 enum Stance { REGULAR, GOOFY }
 enum PopState { NONE, LOADING_OLLIE, LOADING_NOLLIE, POPPED }
+## Which physical foot. Was a String tested with begins_with("Left") in ~24 places, which is the same
+## failure shape as the trick-name strings removed from this project: a typo compiles cleanly and
+## fails silently. Strings now exist only at the HUD boundary, via foot_name().
+enum Foot { LEFT, RIGHT }
+## Which end of the deck a foot is over.
+enum DeckEnd { NOSE, TAIL }
 
 @export var stance: Stance = Stance.REGULAR
 @export var board_config: SkateBoardConfig
@@ -37,9 +43,7 @@ var last_pop: TrickSignature.Pop = TrickSignature.Pop.OLLIE
 ## fills in body_deg at touchdown, once the body rotation has actually happened.
 var current_trick: TrickSignature = TrickSignature.new()
 var active_flip_type: String = "None"
-var active_spin_type: String = "None"
 var last_scoop_sign: float = -1.0
-var initial_scoop_angle: float = 0.0
 var max_swept_angle: float = 0.0
 var accumulated_scoop_deg: float = 0.0
 var _last_frame_scoop_angle: float = 0.0
@@ -50,11 +54,26 @@ var last_trick_signature: String = "-"
 var _prev_space_pressed: bool = false
 
 # Live Facts
-var leading_foot: String = "Left Foot"
-var trailing_foot: String = "Right Foot"
-var left_foot_over: String = "Nose"
-var right_foot_over: String = "Tail"
-var current_velocity: Vector3 = Vector3.ZERO
+var leading_foot: Foot = Foot.LEFT
+var trailing_foot: Foot = Foot.RIGHT
+var left_foot_over: DeckEnd = DeckEnd.NOSE
+var right_foot_over: DeckEnd = DeckEnd.TAIL
+
+## Display helpers. These are the ONLY place foot/deck identity becomes a string - logic compares
+## enum values, never text.
+static func foot_name(f: Foot) -> String:
+	return "Left Foot" if f == Foot.LEFT else "Right Foot"
+
+static func deck_end_name(e: DeckEnd) -> String:
+	return "Nose" if e == DeckEnd.NOSE else "Tail"
+
+## The stick belonging to the leading / trailing foot. Five call sites across two files used to
+## re-derive this inline, each independently responsible for getting stance handedness right.
+func front_stick() -> Vector2:
+	return left_stick_raw if leading_foot == Foot.LEFT else right_stick_raw
+
+func back_stick() -> Vector2:
+	return right_stick_raw if leading_foot == Foot.LEFT else left_stick_raw
 
 func _physics_process(_delta: float) -> void:
 	_poll_inputs()
@@ -122,32 +141,29 @@ func _detect_pop_load_and_flick() -> void:
 	if current_pop_state == PopState.POPPED:
 		return # Wait for SkaterController touchdown to reset state
 		
-	# Determine leading (front) and trailing (back) sticks dynamically based on live travel stance
-	var left_is_front: bool = leading_foot.begins_with("Left")
-	var front_stick: Vector2 = left_stick_raw if left_is_front else right_stick_raw
-	var back_stick: Vector2 = right_stick_raw if left_is_front else left_stick_raw
+	var left_is_front: bool = leading_foot == Foot.LEFT
+	var front: Vector2 = front_stick()
+	var back: Vector2 = back_stick()
 	
 	# Ollie / Switch Ollie Load (Trailing back foot pulled down in lower hemisphere)
 	if current_pop_state == PopState.NONE:
-		if back_stick.length() >= 0.70 and back_stick.y >= 0.50:
+		if back.length() >= 0.70 and back.y >= 0.50:
 			current_pop_state = PopState.LOADING_OLLIE
 			trick_status_string = "Loading Ollie (Tail)"
-			initial_scoop_angle = rad_to_deg(back_stick.angle())
-			_last_frame_scoop_angle = initial_scoop_angle
+			_last_frame_scoop_angle = rad_to_deg(back.angle())
 			accumulated_scoop_deg = 0.0
 			max_swept_angle = 0.0
 		# Nollie / Switch Nollie Load (Leading front foot pushed up in upper hemisphere)
-		elif front_stick.length() >= 0.70 and front_stick.y <= -0.50:
+		elif front.length() >= 0.70 and front.y <= -0.50:
 			current_pop_state = PopState.LOADING_NOLLIE
 			trick_status_string = "Loading Nollie (Nose)"
-			initial_scoop_angle = rad_to_deg(front_stick.angle())
-			_last_frame_scoop_angle = initial_scoop_angle
+			_last_frame_scoop_angle = rad_to_deg(front.angle())
 			accumulated_scoop_deg = 0.0
 			max_swept_angle = 0.0
 			
 	# Measure total angular sweep (arc span) and true rotational direction via frame delta accumulation to prevent circle-wrap bugs
 	if current_pop_state != PopState.NONE:
-		var active_scoop: Vector2 = back_stick if current_pop_state == PopState.LOADING_OLLIE else front_stick
+		var active_scoop: Vector2 = back if current_pop_state == PopState.LOADING_OLLIE else front
 		if active_scoop.length() >= 0.30:
 			var curr_deg: float = rad_to_deg(active_scoop.angle())
 			var frame_delta: float = rad_to_deg(angle_difference(deg_to_rad(_last_frame_scoop_angle), deg_to_rad(curr_deg)))
@@ -160,7 +176,7 @@ func _detect_pop_load_and_flick() -> void:
 					last_scoop_sign = -1.0 if accumulated_scoop_deg > 0.0 else 1.0
 	
 	# Execute Flick Pop from loaded states
-	if current_pop_state == PopState.LOADING_OLLIE and front_stick.length() >= 0.35 and front_stick.y <= 0.20:
+	if current_pop_state == PopState.LOADING_OLLIE and front.length() >= 0.35 and front.y <= 0.20:
 		pop_impulse_triggered = true
 		current_pop_state = PopState.POPPED
 		# Differentiate Switch vs Regular Ollie based on profile stance vs live orientation
@@ -169,7 +185,7 @@ func _detect_pop_load_and_flick() -> void:
 		else:
 			_set_pop(TrickSignature.Pop.OLLIE)
 		_build_trick_signature()
-	elif current_pop_state == PopState.LOADING_NOLLIE and back_stick.length() >= 0.35 and back_stick.y >= -0.20:
+	elif current_pop_state == PopState.LOADING_NOLLIE and back.length() >= 0.35 and back.y >= -0.20:
 		pop_impulse_triggered = true
 		current_pop_state = PopState.POPPED
 		if (stance == Stance.REGULAR and not left_is_front) or (stance == Stance.GOOFY and left_is_front):
@@ -193,25 +209,21 @@ func _set_pop(p: TrickSignature.Pop) -> void:
 ## there. Nothing here builds a display string; naming lives entirely in TrickNames.gd.
 func _build_trick_signature() -> void:
 	active_flip_type = "None"
-	active_spin_type = "None"
 
 	var sig := TrickSignature.new()
 	sig.pop = last_pop
 
-	var left_is_front: bool = leading_foot.begins_with("Left")
+	var left_is_front: bool = leading_foot == Foot.LEFT
 	var flick_stick: Vector2
-	var scoop_stick: Vector2
 	var flick_is_left_foot: bool
-	
+
 	if last_pop == TrickSignature.Pop.NOLLIE or last_pop == TrickSignature.Pop.FAKIE_OLLIE:
 		# In a Nollie or Fakie Ollie pop, the TRAILING foot is the flicking foot
-		flick_stick = right_stick_raw if left_is_front else left_stick_raw
-		scoop_stick = left_stick_raw if left_is_front else right_stick_raw
+		flick_stick = back_stick()
 		flick_is_left_foot = not left_is_front
 	else:
 		# In an Ollie pop, the LEADING foot is the flicking foot
-		flick_stick = left_stick_raw if left_is_front else right_stick_raw
-		scoop_stick = right_stick_raw if left_is_front else left_stick_raw
+		flick_stick = front_stick()
 		flick_is_left_foot = left_is_front
 	
 	# Universal Flick Rule: Flicking outward (-X for Left, +X for Right = behind body) = Kickflip; Inward (+X for Left, -X for Right = in front of body) = Heelflip
@@ -225,9 +237,9 @@ func _build_trick_signature() -> void:
 	elif Input.is_physical_key_pressed(KEY_X) or Input.is_physical_key_pressed(KEY_G):
 		active_flip_type = "Heelflip"
 		
-	# In Fakie stance the flicking foot swaps ends, so the physical flick maps to the opposite deck
-	# roll. Mirror the classification to keep control-to-rotation behaviour unchanged.
-	if last_pop == TrickSignature.Pop.FAKIE_OLLIE and active_flip_type != "None":
+	# In Fakie and Nollie stance the flicking foot swaps ends, so the physical flick maps to the opposite deck
+	# roll. Mirror the classification to keep both HUD trick terminology and control-to-rotation behaviour accurate.
+	if (last_pop == TrickSignature.Pop.FAKIE_OLLIE or last_pop == TrickSignature.Pop.NOLLIE) and active_flip_type != "None":
 		active_flip_type = "Heelflip" if active_flip_type == "Kickflip" else "Kickflip"
 
 	match active_flip_type:
@@ -245,7 +257,6 @@ func _build_trick_signature() -> void:
 		var magnitude: int = 360 if is_360_shuv else 180
 		sig.shuv_deg = int(magnitude * last_scoop_sign) \
 			* TrickSignature.shuv_sign(stance == Stance.GOOFY, not flick_is_left_foot)
-		active_spin_type = "%d Shove-it" % magnitude # Display only.
 
 	current_trick = sig
 	# Name is resolved at touchdown, once the body rotation has actually happened.
@@ -267,35 +278,38 @@ func _update_polar_decomposition() -> void:
 
 func _classify_push_strokes() -> void:
 	if push_left_triggered:
-		if leading_foot.begins_with("Left"):
+		if leading_foot == Foot.LEFT:
 			last_push_type = "Mongo Push (Leading)"
 		else:
 			last_push_type = "Standard Push (Trailing)"
 	elif push_right_triggered:
-		if leading_foot.begins_with("Right"):
+		if leading_foot == Foot.RIGHT:
 			last_push_type = "Mongo Push (Leading)"
 		else:
 			last_push_type = "Standard Push (Trailing)"
 
-func update_stance_facts(pivot: Node3D, left_foot: Node3D, right_foot: Node3D, vel: Vector3) -> void:
-	current_velocity = vel
+## `root` is the yaw-carrying SkaterRoot. It is passed explicitly rather than reached via
+## pivot.get_parent(), which now resolves to the surface-tilted SurfaceAlign node and would skew the
+## stationary forward vector on any ramp.
+func update_stance_facts(pivot: Node3D, left_foot: Node3D, right_foot: Node3D, vel: Vector3, root: Node3D = null) -> void:
 	var nose_pos: Vector3 = pivot.to_global(Vector3(0, 0, -0.35))
 	
 	# Live Mesh-Under-Foot check via distance to Nose
 	if left_foot.global_position.distance_squared_to(nose_pos) < right_foot.global_position.distance_squared_to(nose_pos):
-		left_foot_over = "Nose"
-		right_foot_over = "Tail"
+		left_foot_over = DeckEnd.NOSE
+		right_foot_over = DeckEnd.TAIL
 	else:
-		left_foot_over = "Tail"
-		right_foot_over = "Nose"
+		left_foot_over = DeckEnd.TAIL
+		right_foot_over = DeckEnd.NOSE
 	
 	# Live Trailing / Leading Foot check via velocity or static forward alignment
-	var travel_dir: Vector3 = vel.normalized() if vel.length_squared() > 0.05 else -pivot.get_parent().global_transform.basis.z
+	var forward_source: Node3D = root if root != null else pivot.get_parent()
+	var travel_dir: Vector3 = vel.normalized() if vel.length_squared() > 0.05 else -forward_source.global_transform.basis.z
 	var left_dot: float = (left_foot.global_position - pivot.global_position).dot(travel_dir)
 	var right_dot: float = (right_foot.global_position - pivot.global_position).dot(travel_dir)
 	if left_dot > right_dot:
-		leading_foot = "Left Foot"
-		trailing_foot = "Right Foot"
+		leading_foot = Foot.LEFT
+		trailing_foot = Foot.RIGHT
 	else:
-		leading_foot = "Right Foot"
-		trailing_foot = "Left Foot"
+		leading_foot = Foot.RIGHT
+		trailing_foot = Foot.LEFT

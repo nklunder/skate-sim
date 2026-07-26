@@ -3,6 +3,10 @@
 [ext_resource type="Script" path="res://scripts/ui/DebugHUD.gd" id="1_hud_script"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
+content_margin_left = 16.0
+content_margin_top = 16.0
+content_margin_right = 16.0
+content_margin_bottom = 16.0
 bg_color = Color(0.08, 0.1, 0.14, 0.88)
 border_width_left = 2
 border_width_top = 2
@@ -13,10 +17,6 @@ corner_radius_top_left = 8
 corner_radius_top_right = 8
 corner_radius_bottom_right = 8
 corner_radius_bottom_left = 8
-expand_margin_left = 12.0
-expand_margin_top = 12.0
-expand_margin_right = 12.0
-expand_margin_bottom = 12.0
 
 [node name="DebugHUD" type="Control"]
 layout_mode = 3
@@ -27,21 +27,16 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_hud_script")
 
-[node name="Panel" type="Panel" parent="."]
+[node name="Panel" type="PanelContainer" parent="."]
 layout_mode = 0
 offset_left = 24.0
 offset_top = 24.0
-offset_right = 430.0
-offset_bottom = 478.0
+offset_right = 460.0
+offset_bottom = 520.0
 theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
 
 [node name="VBoxContainer" type="VBoxContainer" parent="Panel"]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
+layout_mode = 2
 theme_override_constants/separation = 5
 
 [node name="TitleLabel" type="Label" parent="Panel/VBoxContainer"]
@@ -106,17 +101,29 @@ layout_mode = 2
 layout_mode = 2
 text = "Static Config Stance: REGULAR"
 
-[node name="LeadingLabel" type="Label" parent="Panel/VBoxContainer"]
+[node name="LeadingLabel" type="RichTextLabel" parent="Panel/VBoxContainer"]
 layout_mode = 2
+bbcode_enabled = true
 text = "Live Leading Foot: Left Foot"
+fit_content = true
+scroll_active = false
+autowrap_mode = 0
 
-[node name="TrailingLabel" type="Label" parent="Panel/VBoxContainer"]
+[node name="TrailingLabel" type="RichTextLabel" parent="Panel/VBoxContainer"]
 layout_mode = 2
+bbcode_enabled = true
 text = "Live Trailing Foot: Right Foot"
+fit_content = true
+scroll_active = false
+autowrap_mode = 0
 
 [node name="MeshUnderFootLabel" type="Label" parent="Panel/VBoxContainer"]
 layout_mode = 2
 text = "Mesh Under Foot: L->[Nose] | R->[Tail]"
+
+[node name="SurfaceLabel" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+text = "Surface: -"
 
 [node name="SignatureLabel" type="Label" parent="Panel/VBoxContainer"]
 layout_mode = 2

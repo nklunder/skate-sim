@@ -35,62 +35,50 @@ script = ExtResource("1_controller")
 script = ExtResource("2_input")
 board_config = ExtResource("3_config")
 
-[node name="BoardPivot" type="Node3D" parent="."]
+[node name="SurfaceAlign" type="Node3D" parent="."]
 
-[node name="BoardMesh" type="Node3D" parent="BoardPivot"]
+[node name="BoardPivot" type="Node3D" parent="SurfaceAlign"]
+
+[node name="BoardMesh" type="Node3D" parent="SurfaceAlign/BoardPivot"]
 script = ExtResource("4_deck_mesh")
 
-[node name="LeftFoot" type="MeshInstance3D" parent="BoardPivot"]
+[node name="LeftFoot" type="MeshInstance3D" parent="SurfaceAlign/BoardPivot"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.025, 0.055, -0.25)
 mesh = SubResource("BoxMesh_foot")
 surface_material_override/0 = SubResource("StandardMaterial3D_foot_l")
 
-[node name="ToeTip" type="MeshInstance3D" parent="BoardPivot/LeftFoot"]
+[node name="ToeTip" type="MeshInstance3D" parent="SurfaceAlign/BoardPivot/LeftFoot"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.1155, 0, 0)
 mesh = SubResource("CylinderMesh_toe")
 surface_material_override/0 = SubResource("StandardMaterial3D_foot_l")
 
-[node name="PegPivot" type="Node3D" parent="BoardPivot/LeftFoot"]
+[node name="PegPivot" type="Node3D" parent="SurfaceAlign/BoardPivot/LeftFoot"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.075, 0.019, 0)
 
-[node name="AnklePeg" type="MeshInstance3D" parent="BoardPivot/LeftFoot/PegPivot"]
+[node name="AnklePeg" type="MeshInstance3D" parent="SurfaceAlign/BoardPivot/LeftFoot/PegPivot"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.075, 0)
+cast_shadow = 0
 mesh = SubResource("CylinderMesh_peg")
 surface_material_override/0 = SubResource("StandardMaterial3D_peg")
 
-[node name="RightFoot" type="MeshInstance3D" parent="BoardPivot"]
+[node name="RightFoot" type="MeshInstance3D" parent="SurfaceAlign/BoardPivot"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.025, 0.055, 0.25)
 mesh = SubResource("BoxMesh_foot")
 surface_material_override/0 = SubResource("StandardMaterial3D_foot_r")
 
-[node name="ToeTip" type="MeshInstance3D" parent="BoardPivot/RightFoot"]
+[node name="ToeTip" type="MeshInstance3D" parent="SurfaceAlign/BoardPivot/RightFoot"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.1155, 0, 0)
 mesh = SubResource("CylinderMesh_toe")
 surface_material_override/0 = SubResource("StandardMaterial3D_foot_r")
 
-[node name="PegPivot" type="Node3D" parent="BoardPivot/RightFoot"]
+[node name="PegPivot" type="Node3D" parent="SurfaceAlign/BoardPivot/RightFoot"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.075, 0.019, 0)
 
-[node name="AnklePeg" type="MeshInstance3D" parent="BoardPivot/RightFoot/PegPivot"]
+[node name="AnklePeg" type="MeshInstance3D" parent="SurfaceAlign/BoardPivot/RightFoot/PegPivot"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.075, 0)
+cast_shadow = 0
 mesh = SubResource("CylinderMesh_peg")
 surface_material_override/0 = SubResource("StandardMaterial3D_peg")
-
-[node name="RayCastFL" type="RayCast3D" parent="BoardPivot"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.09, 0, -0.28)
-target_position = Vector3(0, -0.5, 0)
-
-[node name="RayCastFR" type="RayCast3D" parent="BoardPivot"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.09, 0, -0.28)
-target_position = Vector3(0, -0.5, 0)
-
-[node name="RayCastBL" type="RayCast3D" parent="BoardPivot"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.09, 0, 0.28)
-target_position = Vector3(0, -0.5, 0)
-
-[node name="RayCastBR" type="RayCast3D" parent="BoardPivot"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.09, 0, 0.28)
-target_position = Vector3(0, -0.5, 0)
 
 [node name="CameraPivot" type="Node3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 0.906308, 0.422618, 0, -0.422618, 0.906308, 0, 1.25, 2.1)

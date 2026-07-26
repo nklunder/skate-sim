@@ -1,6 +1,27 @@
 class_name SkaterController
 extends Node3D
 
+@export_category("Surface Collision")
+# Rig origin to wheel contact, measured from the model: the lowest wheel vertex sits 0.078 below
+# the rig origin. The old hardcoded 0.25 was never this distance - it was just the height the rig
+# happened to be placed at, while the Ground body's top surface is at y=0, so the board floated
+# 17 cm and its shadow read as detached.
+@export var ride_height: float = 0.078
+@export var probe_reach: float = 1.2 # How far below the trucks to look for a surface.
+@export var ground_snap_distance: float = 0.06 # Surface gap within which the skater counts as grounded.
+@export var surface_align_speed: float = 12.0 # Lerp rate for pitching/rolling onto a new surface.
+@export var max_surface_angle_deg: float = 50.0 # Steeper than this is a wall, not a ridable surface.
+# Measured from the model: axle CENTRES sit at z = +/-0.2250 (0.45 m wheelbase) with 48 mm wheels.
+# Do not derive these from the wheels' bounding extents - that gives 0.2489, which is the axle plus
+# the wheel radius, and pivoting there lifts the board off the ground instead of seating it.
+@export var manual_axle_z: float = 0.225
+@export var wheel_radius: float = 0.024
+@export var truck_half_width: float = 0.09 # Lateral spacing of the ground probes.
+@export var wall_probe_distance: float = 0.35 # Forward reach of the wall block probe.
+@export_range(0.0, 1.0) var wall_stop_damping: float = 0.0 # Speed retained on wall contact.
+var _probe: SurfaceProbe = null
+var surface_hit: SurfaceProbe.Hit = SurfaceProbe.Hit.new()
+
 @export_category("Manual & Pitch Tolerances")
 @export var manual_entry_delay: float = 0.08
 @export var max_landing_tolerance_deg: float = 15.0
@@ -28,18 +49,17 @@ var airborne_body_yaw_deg: float = 0.0
 var pop_riding_reversed: bool = false
 
 @onready var input_state: FootInputState = $FootInputState
-@onready var board_pivot: Node3D = $BoardPivot
-@onready var board_mesh: Node3D = $BoardPivot/BoardMesh
-@onready var left_foot: MeshInstance3D = $BoardPivot/LeftFoot
-@onready var right_foot: MeshInstance3D = $BoardPivot/RightFoot
-@onready var left_peg_pivot: Node3D = $BoardPivot/LeftFoot/PegPivot
-@onready var right_peg_pivot: Node3D = $BoardPivot/RightFoot/PegPivot
-
-# Truck contact raycasts
-@onready var ray_fl: RayCast3D = $BoardPivot/RayCastFL
-@onready var ray_fr: RayCast3D = $BoardPivot/RayCastFR
-@onready var ray_bl: RayCast3D = $BoardPivot/RayCastBL
-@onready var ray_br: RayCast3D = $BoardPivot/RayCastBR
+## Carries ONLY surface pitch/roll. Deliberately a separate node from BoardPivot: that one's X is
+## trick pitch (written by the manual/pop systems and read back by landing checks), so sharing the
+## channel would corrupt manuals, wheel-bite detection and pops. CameraPivot stays on SkaterRoot so
+## the chase camera does not roll with the ramp.
+@onready var surface_align: Node3D = $SurfaceAlign
+@onready var board_pivot: Node3D = $SurfaceAlign/BoardPivot
+@onready var board_mesh: Node3D = $SurfaceAlign/BoardPivot/BoardMesh
+@onready var left_foot: MeshInstance3D = $SurfaceAlign/BoardPivot/LeftFoot
+@onready var right_foot: MeshInstance3D = $SurfaceAlign/BoardPivot/RightFoot
+@onready var left_peg_pivot: Node3D = $SurfaceAlign/BoardPivot/LeftFoot/PegPivot
+@onready var right_peg_pivot: Node3D = $SurfaceAlign/BoardPivot/RightFoot/PegPivot
 
 @export_category("Motion & Push Physics")
 @export var max_push_speed: float = 7.0
@@ -62,19 +82,117 @@ var push_anim_duration: float = 0.25
 func _ready() -> void:
 	left_foot_rest = left_foot.position
 	right_foot_rest = right_foot.position
+	var exclude: Array[RID] = []
+	_probe = SurfaceProbe.new(get_world_3d().direct_space_state, exclude)
+
+## Truck corners in world space, derived from SkaterRoot's YAW ONLY. Deliberately not taken from the
+## board nodes: those pitch 22 deg on every pop and roll during flips, which would swing the probe
+## origins around exactly when landing accuracy matters most.
+func _truck_points() -> PackedVector3Array:
+	var yaw_basis := Basis(Vector3.UP, rotation.y)
+	var origin := global_position
+	var pts := PackedVector3Array()
+	# Footprint comes from the SAME measured axle position the manual pivot uses. It previously
+	# carried the deleted RayCast nodes' z = +/-0.28, which disagreed with the real axle at 0.225.
+	for sx in [-truck_half_width, truck_half_width]:
+		for sz in [-manual_axle_z, manual_axle_z]:
+			pts.append(origin + yaw_basis * Vector3(sx, 0.0, sz))
+	return pts
+
+## Probes for the surface under the trucks. Starts slightly above the rig so the ray cannot begin
+## already inside a ledge the skater is standing on.
+func _probe_surface() -> SurfaceProbe.Hit:
+	if _probe == null:
+		return SurfaceProbe.Hit.new()
+	var pts := PackedVector3Array()
+	for p in _truck_points():
+		pts.append(p + Vector3.UP * 0.1)
+	var hit: SurfaceProbe.Hit = _probe.highest_below(pts, probe_reach + 0.1)
+	# Anything steeper than max_surface_angle_deg is a wall face, not something to stand on.
+	if hit.valid and rad_to_deg(hit.normal.angle_to(Vector3.UP)) > max_surface_angle_deg:
+		return SurfaceProbe.Hit.new()
+	return hit
+
+## Height the rig should sit at to rest on the probed surface.
+func _surface_ride_y() -> float:
+	return surface_hit.position.y + ride_height
+
+## Tilts SurfaceAlign onto the probed surface normal. Ramps come out of this for free; so does
+## flattening back out in the air.
+func _apply_surface_alignment(delta: float) -> void:
+	var target := Vector3.ZERO
+	if is_grounded and surface_hit.valid:
+		# Express the normal in the rig's yaw frame so pitch/roll read as board-local tilt.
+		var local_n: Vector3 = Basis(Vector3.UP, -rotation.y) * surface_hit.normal
+		# Solve for the rotation that carries the board's local +Y onto the surface normal:
+		# rotating about X by t maps +Y to (0, cos t, sin t), and about Z by t maps it to
+		# (-sin t, cos t, 0). Getting either negation backwards tilts the board AWAY from the slope
+		# by the slope angle instead of onto it - a 2x error that reads as "pitches forward going
+		# uphill". Asserted by align_test: board up axis must equal the surface normal.
+		target.x = atan2(local_n.z, local_n.y)
+		target.z = atan2(-local_n.x, local_n.y)
+	surface_align.rotation.x = lerp_angle(surface_align.rotation.x, target.x, surface_align_speed * delta)
+	surface_align.rotation.z = lerp_angle(surface_align.rotation.z, target.z, surface_align_speed * delta)
+
+## Makes the board pitch about the CONTACT AXLE rather than the rig origin.
+##
+## BoardPivot sits at the rig origin - board centre, ride_height above the ground - so rotating it
+## drove the dipping end straight through the floor (8.7 cm under at full 24 deg manual). A real
+## manual pivots about the wheels that are still touching.
+##
+## Rotating a child about a point P instead of its origin is a pure offset: the board point at local
+## P must stay where it sat before the pitch was applied. With basis = Ry * Rx that solves to
+## position = Ry * (P - Rx * P), so the yaw (body spin) carries the offset around correctly.
+##
+## Only applied while grounded - airborne, the deck should spin about its centre or flips look wrong.
+func _apply_manual_pivot() -> void:
+	var offset := Vector3.ZERO
+	if is_grounded:
+		var pitch: float = board_pivot.rotation.x
+		if absf(pitch) > 0.0001:
+			# Pivot on the AXLE CENTRE, not the contact patch: the wheel is round, so rotating about
+			# its centre keeps it tangent to the ground as it rolls. Using the contact point instead
+			# lifts the board a few mm at full tilt.
+			var p := Vector3(0.0, -(ride_height - wheel_radius), manual_axle_z * signf(pitch))
+			offset = Basis(Vector3.UP, board_pivot.rotation.y) * (p - Basis(Vector3.RIGHT, pitch) * p)
+	board_pivot.position = offset
+
+## Stops horizontal motion against vertical faces. Probes from truck height in the travel direction.
+func _blocked_by_wall(travel: Vector3) -> bool:
+	if _probe == null or travel.length_squared() < 0.0001:
+		return false
+	var dir: Vector3 = travel.normalized()
+	var origin: Vector3 = global_position + Vector3.UP * 0.02
+	var hit: SurfaceProbe.Hit = _probe.cast_horizontal(origin, dir, wall_probe_distance)
+	if not hit.valid:
+		return false
+	# Only near-vertical faces block; ramps and curb tops are handled by the ground probe.
+	return rad_to_deg(hit.normal.angle_to(Vector3.UP)) > max_surface_angle_deg
 
 func _physics_process(delta: float) -> void:
-	# 1. Grounded vs Airborne evaluation
-	if vertical_velocity > 0.05 or global_position.y > 0.27:
+	# 1. Grounded vs Airborne evaluation, measured against real geometry rather than a fixed plane.
+	#
+	# Proximity may only KEEP the skater grounded, never make them grounded. The airborne -> grounded
+	# transition belongs exclusively to the touchdown path in section 6, which is what zeroes
+	# vertical_velocity and runs _evaluate_touchdown_landing() (landing tolerances, bail checks,
+	# trick naming). Letting this block flip the flag on proximity skipped all of that whenever the
+	# skater entered the snap band gently - rolling off a low curb left v_speed stuck negative
+	# forever and never resolved the trick name.
+	surface_hit = _probe_surface()
+	if vertical_velocity > 0.05:
 		is_grounded = false
-	else:
-		var ray_colliding: bool = ray_fl.is_colliding() or ray_fr.is_colliding() or ray_bl.is_colliding() or ray_br.is_colliding()
-		is_grounded = ray_colliding or (global_position.y <= 0.45)
-	
+	elif not surface_hit.valid:
+		is_grounded = false # Nothing underneath - rolled off a ledge, no special case needed.
+	elif is_grounded:
+		is_grounded = global_position.y - _surface_ride_y() <= ground_snap_distance
+
 	# Synchronize all kinematic animations and stance updates to physics tick
 	_animate_ankle_pegs(delta)
 	_animate_foot_push_stroke(delta)
-	input_state.update_stance_facts(board_pivot, left_foot, right_foot, velocity)
+	_apply_surface_alignment(delta)
+	# Pass SkaterRoot, not board_pivot: update_stance_facts() reads pivot.get_parent() for the
+	# stationary forward vector, and that parent is now the surface-tilted SurfaceAlign node.
+	input_state.update_stance_facts(board_pivot, left_foot, right_foot, velocity, self)
 	
 	# 2. Push Acceleration Impulses via Face Buttons (latched inputs ensure zero missed taps)
 	if input_state.push_left_triggered or input_state.push_right_triggered:
@@ -86,7 +204,7 @@ func _physics_process(delta: float) -> void:
 				_start_foot_push("right")
 			input_state.push_left_triggered = false
 			input_state.push_right_triggered = false
-		elif vertical_velocity > 0.5 or global_position.y > 0.60:
+		elif vertical_velocity > 0.5 or (surface_hit.valid and global_position.y - _surface_ride_y() > 0.35):
 			# Clear stale latched presses if high in the air to prevent unintended touchdown bursts
 			input_state.push_left_triggered = false
 			input_state.push_right_triggered = false
@@ -114,17 +232,17 @@ func _physics_process(delta: float) -> void:
 		var sig: TrickSignature = input_state.current_trick
 
 		# Initial kicktail pitch angle and flip roll sign upon popping (inverted in Switch/Fakie where Y == 180!)
-		var stance_sign: float = -1.0 if (not input_state.leading_foot.begins_with("Left")) else 1.0
+		var stance_sign: float = 1.0 if input_state.leading_foot == FootInputState.Foot.LEFT else -1.0
 		if sig.pop == TrickSignature.Pop.NOLLIE or sig.pop == TrickSignature.Pop.FAKIE_OLLIE:
 			board_pivot.rotation_degrees.x = -22.0 * stance_sign # Leading nose pop
 		else:
 			board_pivot.rotation_degrees.x = 22.0 * stance_sign # Trailing tail pop
 
-		# Configure BoardMesh flip & spin targets (Layer 3), decoupling from 180° deck yaw reversal and calibrating by stance
+		# Configure BoardMesh flip & spin targets (Layer 3). Only the deck's own 180 deg yaw reversal
+		# after a Shove-it needs compensating here - Nollie/Fakie flip mirroring is already applied
+		# in FootInputState._build_trick_signature(), so there is no stance term.
 		var deck_reversed: bool = cos(deg_to_rad(board_mesh.rotation_degrees.y)) < 0.0
-		var deck_orientation_comp: float = -1.0 if deck_reversed else 1.0
-		var stance_roll_sign: float = -1.0 if sig.pop == TrickSignature.Pop.NOLLIE else 1.0
-		var roll_sign: float = stance_roll_sign * deck_orientation_comp
+		var roll_sign: float = -1.0 if deck_reversed else 1.0
 		if sig.flip == TrickSignature.Flip.KICK:
 			target_board_roll = board_mesh.rotation_degrees.z + (360.0 * roll_sign)
 			is_flip_in_progress = true
@@ -180,18 +298,27 @@ func _physics_process(delta: float) -> void:
 			left_foot.position.y = lerpf(left_foot.position.y, left_foot_rest.y, 16.0 * delta)
 			right_foot.position.y = lerpf(right_foot.position.y, right_foot_rest.y, 16.0 * delta)
 		
-		# Touchdown landing contact on ground layer (Y <= 0.25)
-		if global_position.y <= 0.25 and vertical_velocity <= 0.0:
-			global_position.y = 0.25
+		# Touchdown onto whatever surface the probe found - ground, curb top, ramp face.
+		if surface_hit.valid and global_position.y <= _surface_ride_y() and vertical_velocity <= 0.0:
+			global_position.y = _surface_ride_y()
 			vertical_velocity = 0.0
 			is_grounded = true
 			current_aerial_spin_rate = 0.0
 			input_state.current_pop_state = FootInputState.PopState.NONE
 			_evaluate_touchdown_landing()
 	
-	# 7. Horizontal Kinematic Motion Execution
+	# 7. Horizontal Kinematic Motion Execution, blocked by vertical faces.
 	velocity = -global_transform.basis.z * current_speed
-	global_position += velocity * delta
+	var travel: Vector3 = velocity * delta
+	if _blocked_by_wall(travel):
+		current_speed *= wall_stop_damping
+		velocity = Vector3.ZERO
+	else:
+		global_position += travel
+
+	# Ride the surface while grounded so curb tops and ramps are followed rather than fallen through.
+	if is_grounded and surface_hit.valid:
+		global_position.y = _surface_ride_y()
 	
 	# 8. Grounded Board Rotations & Middle-Zone Manuals (only when on pavement)
 	if is_grounded:
@@ -200,16 +327,20 @@ func _physics_process(delta: float) -> void:
 			left_foot.position = left_foot_rest
 			right_foot.position = right_foot_rest
 
+	# 9. Re-seat the board onto its contact axle. Runs last, after every writer of board_pivot pitch
+	# (the pop in step 5, airborne pitch in step 6, grounded manuals just above).
+	_apply_manual_pivot()
+
 func _apply_airborne_board_pitch(delta: float) -> void:
 	var target_pitch_deg: float = 0.0
-	var left_is_front: bool = input_state.leading_foot.begins_with("Left")
-	var front_stick: Vector2 = input_state.left_stick_raw if left_is_front else input_state.right_stick_raw
-	var back_stick: Vector2 = input_state.right_stick_raw if left_is_front else input_state.left_stick_raw
-	
-	if back_stick.y > 0.15:
-		target_pitch_deg = back_stick.y * 24.0 # Tail dip (trailing edge)
-	elif front_stick.y < -0.15:
-		target_pitch_deg = front_stick.y * 24.0 # Nose dip (leading edge)
+	var left_is_front: bool = input_state.leading_foot == FootInputState.Foot.LEFT
+	var front: Vector2 = input_state.front_stick()
+	var back: Vector2 = input_state.back_stick()
+
+	if back.y > 0.15:
+		target_pitch_deg = back.y * 24.0 # Tail dip (trailing edge)
+	elif front.y < -0.15:
+		target_pitch_deg = front.y * 24.0 # Nose dip (leading edge)
 		
 	if not left_is_front:
 		target_pitch_deg = -target_pitch_deg # Invert local X rotation when board is at Y=180
@@ -263,15 +394,15 @@ func _evaluate_touchdown_landing() -> void:
 	var pitch: float = board_pivot.rotation_degrees.x
 	var in_manual_zone: bool = false
 	
-	var left_is_front: bool = input_state.leading_foot.begins_with("Left")
-	var front_stick: Vector2 = input_state.left_stick_raw if left_is_front else input_state.right_stick_raw
-	var back_stick: Vector2 = input_state.right_stick_raw if left_is_front else input_state.left_stick_raw
-	
+	var left_is_front: bool = input_state.leading_foot == FootInputState.Foot.LEFT
+	var front: Vector2 = input_state.front_stick()
+	var back: Vector2 = input_state.back_stick()
+
 	# Check if back or front stick is cleanly held within the expanded Manual Zone (0.20 to 0.90) upon touchdown
-	var effective_pitch: float = -pitch if not left_is_front else pitch
-	if effective_pitch > 5.0 and back_stick.y >= 0.20 and back_stick.y <= 0.90:
+	var effective_pitch: float = pitch if left_is_front else -pitch
+	if effective_pitch > 5.0 and back.y >= 0.20 and back.y <= 0.90:
 		in_manual_zone = true # Touchdown into standard / switch manual!
-	elif effective_pitch < -5.0 and front_stick.y <= -0.20 and front_stick.y >= -0.90:
+	elif effective_pitch < -5.0 and front.y <= -0.20 and front.y >= -0.90:
 		in_manual_zone = true # Touchdown into nose / switch nose manual!
 	
 	if in_manual_zone:
@@ -293,21 +424,21 @@ func _evaluate_touchdown_landing() -> void:
 
 func _apply_grounded_board_pitch(delta: float) -> void:
 	var target_pitch_deg: float = 0.0
-	var left_is_front: bool = input_state.leading_foot.begins_with("Left")
-	var front_stick: Vector2 = input_state.left_stick_raw if left_is_front else input_state.right_stick_raw
-	var back_stick: Vector2 = input_state.right_stick_raw if left_is_front else input_state.left_stick_raw
-	
+	var left_is_front: bool = input_state.leading_foot == FootInputState.Foot.LEFT
+	var front: Vector2 = input_state.front_stick()
+	var back: Vector2 = input_state.back_stick()
+
 	# Manuals trigger in the expanded middle zone between 0.20 and 0.90 on whichever stick corresponds to leading/trailing edge!
-	if back_stick.y > 0.20 and back_stick.y <= 0.90:
-		target_pitch_deg = back_stick.y * 24.0
-	elif front_stick.y < -0.20 and front_stick.y >= -0.90:
-		target_pitch_deg = front_stick.y * 24.0
+	if back.y > 0.20 and back.y <= 0.90:
+		target_pitch_deg = back.y * 24.0
+	elif front.y < -0.20 and front.y >= -0.90:
+		target_pitch_deg = front.y * 24.0
 		
 	if not left_is_front:
 		target_pitch_deg = -target_pitch_deg # Invert local X rotation when board is at Y=180
 	
 	# Tightened Grounded Manual Delay (80ms): ignores brief transition frames when fast-snapping to full extension
-	if is_grounded and abs(target_pitch_deg) > 0.5:
+	if abs(target_pitch_deg) > 0.5:
 		if manual_timer < manual_entry_delay:
 			manual_timer += delta
 			target_pitch_deg = 0.0
@@ -329,12 +460,15 @@ func _animate_foot_push_stroke(delta: float) -> void:
 			right_foot.position = right_foot_rest
 			active_push_foot = ""
 		else:
-			# Sinusoidal dip to ground zero (Y - 0.055) paired with a forward-to-backward sweeping thrust on Z
+			# Sinusoidal dip toward the deck surface paired with a forward-to-backward sweeping thrust on Z
 			var vertical_dip: float = sin(progress * PI) * -0.055
-			var lateral_reach: float = sin(progress * PI) * 0.22
+			var left_is_leading: bool = input_state.leading_foot == FootInputState.Foot.LEFT
+			var is_mongo_push: bool = (active_push_foot == "left" and left_is_leading) or (active_push_foot == "right" and not left_is_leading)
+			var lateral_dir: float = -1.0 if is_mongo_push else 1.0 # Mongo reaches to heel side (-X), Standard reaches to toe side (+X)
+			var lateral_reach: float = sin(progress * PI) * 0.22 * lateral_dir
 			var longitudinal_sweep: float = cos(progress * PI) * -0.15 # Reaches forward at start, thrusts backward at finish!
 			if active_push_foot == "left":
-				left_foot.position = left_foot_rest + Vector3(-lateral_reach, vertical_dip, longitudinal_sweep)
+				left_foot.position = left_foot_rest + Vector3(lateral_reach, vertical_dip, longitudinal_sweep)
 			else:
 				right_foot.position = right_foot_rest + Vector3(lateral_reach, vertical_dip, longitudinal_sweep)
 
