@@ -81,7 +81,7 @@ mesh = SubResource("CylinderMesh_peg")
 surface_material_override/0 = SubResource("StandardMaterial3D_peg")
 
 [node name="CameraPivot" type="Node3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 0.906308, 0.422618, 0, -0.422618, 0.906308, 0, 1.25, 2.1)
 
 [node name="Camera3D" type="Camera3D" parent="CameraPivot"]
+transform = Transform3D(1, 0, 0, 0, 0.906308, 0.422618, 0, -0.422618, 0.906308, 0, 1.25, 2.1)
 current = true

@@ -40,7 +40,11 @@ func _process(_delta: float) -> void:
 		air_gap = skater_controller.global_position.y - skater_controller.surface_hit.position.y - skater_controller.ride_height
 	alt_lbl.text = "Height: %s m | V-Speed: %s m/s" % [_fmt(air_gap), _fmt(skater_controller.vertical_velocity)]
 	
-	speed_lbl.text = "Speed: %.2f m/s (Max: %.1f)" % [skater_controller.current_speed, skater_controller.max_push_speed]
+	# Slide is the sideways speed at the last touchdown, against the limit that decides a wash-out.
+	# Shown so max_landing_slide can be tuned against landings you actually felt were fair or unfair.
+	speed_lbl.text = "Speed: %.2f m/s (Max: %.1f) | Slide: %.2f/%.1f" % [
+		skater_controller.current_speed, skater_controller.max_push_speed,
+		skater_controller.last_landing_slide, skater_controller.max_landing_slide]
 	push_lbl.text = "Last Push: %s" % state.last_push_type
 	
 	var deck_roll: float = fmod(skater_controller.board_mesh.rotation_degrees.z, 360.0) if is_instance_valid(skater_controller.board_mesh) else 0.0

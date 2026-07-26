@@ -49,10 +49,75 @@ var catch_cone_deg: float = 45.0
 ## the settle starts erasing it on the very next frame.
 var last_catch_error_deg: float = 0.0
 
+@export_category("Landing Absorption")
+## Visual suspension travel. Until this existed the skater hit the ground at several m/s and stopped
+## in one frame with no give anywhere in the system.
+##
+## NOT the fix for harsh-feeling landings, and worth remembering why: a straight ollie has exactly
+## the same dead stop as a badly-rotated one, and straight ollies read as fine. Impact was never the
+## complaint - the travel-direction jerk was (see landing_turn_rate_deg). This is separate polish,
+## and setting landing_dip_max to 0.0 disables it cleanly.
+##
+## Applied to SurfaceAlign.position, which nothing else writes, so the deck and rider compress toward
+## the ground while the rig ORIGIN stays put. That matters: every ground probe and the ride-height
+## snap work off global_position, so a dip here cannot disturb them. The camera hangs off SkaterRoot
+## and so does not dip, which is what makes the compression readable rather than just a screen shake.
+@export var landing_dip_max: float = 0.04 # Metres of compression at or above the reference impact.
+@export var landing_dip_ref_speed: float = 6.0 # Impact speed producing full compression.
+@export var landing_dip_recover: float = 9.0 # Rate the suspension extends back out.
+var _landing_dip: float = 0.0
+
+@export_category("Camera")
+## How quickly the chase camera's yaw catches up to the rig's.
+##
+## CameraPivot is a rigid child of SkaterRoot, so until this existed every instantaneous change to
+## rig yaw was inherited whole. That was harmless while landings snapped to a perfect 0/180 - rig yaw
+## simply never jumped. It stopped being harmless the moment landings began transferring their
+## heading residual straight into rotation.y: a 5 deg imperfect landing snapped the view 5 deg, and a
+## sideways wash-out snapped it by the full residual.
+##
+## This governs CONTINUOUS tracking only - steering, essentially. Trail during a turn is roughly
+## turn_rate / this at sustained full lean, so ~7 deg at the default 3.0 rad/s. Raise for a tighter,
+## more rigid feel; lower for a looser one. Very high values reproduce rigid parenting exactly.
+##
+## Deliberately NOT the rate that absorbs landing jumps - see camera_recenter_speed. A single rate
+## could not serve both: fast enough to stop ground turns feeling boaty was far too fast for a
+## landing swing, and slow enough to soften the landing made every turn feel like steering a barge.
+@export var camera_follow_speed: float = 25.0
+## Stiffness of the critically damped spring that returns an absorbed landing jump to zero. Settles
+## in roughly 4 / this seconds, so 12.0 is about a third of a second.
+##
+## Critically damped rather than a constant slew or a lerp, because the two failure modes sit at
+## opposite ends: a lerp moves fastest at the instant the error appears (the whip that read as "too
+## snappy"), while a constant slew starts and stops angular velocity abruptly at both ends. A spring
+## starts from rest, swells, and decelerates into place, and never overshoots.
+@export var camera_recenter_speed: float = 12.0
+## How hard the camera's follow position is corrected toward the skater.
+##
+## Velocity is fed forward before this is applied, so riding at a constant speed produces NO lag at
+## all and the framing is exactly as authored. Only CHANGES in motion - landings, wall stops - let
+## the camera fall behind and catch up, which is where the sense of weight comes from. This is also
+## the seam to hang per-trick camera work off later (grinds, manuals): offset the follow position and
+## everything downstream keeps working.
+@export var camera_position_damp: float = 12.0
+@onready var camera_pivot: Node3D = $CameraPivot
+## Smoothed world yaw of the camera, tracked separately from the rig's so the two can diverge.
+var _camera_yaw: float = 0.0
+## Yaw the camera is deliberately still holding onto after a landing jump, plus its spring velocity.
+## Keeping this separate from _camera_yaw is what lets steering stay tight while a landing swing
+## stays gentle - one rate could not do both.
+var _camera_jump_offset: float = 0.0
+var _camera_jump_vel: float = 0.0
+## Damped world position the camera orbits around. NOT simply the skater's position: see
+## camera_position_damp.
+var _camera_pos: Vector3 = Vector3.ZERO
+
 @export_category("Aerial & Jump Physics")
 @export var jump_impulse: float = 5.2
+## Also sets which gradients hold the skater, via rolling_friction - see that field.
 @export var gravity_accel: float = 16.0
-var vertical_velocity: float = 0.0
+# vertical_velocity now lives with `velocity` under Motion & Push Physics: it is velocity.y, not a
+# variable of its own. Two velocity representations was the split this rewrite removed.
 
 @export_category("Flip & Spin Physics (3-Layer Hierarchy)")
 @export var flip_speed_deg: float = 608.0
@@ -100,12 +165,96 @@ var pop_riding_reversed: bool = false
 @onready var right_peg_pivot: Node3D = $SurfaceAlign/BoardPivot/RightFoot/PegPivot
 
 @export_category("Motion & Push Physics")
-@export var max_push_speed: float = 7.0
+@export var max_push_speed: float = 7.0 # Ceiling on PUSHING only - gravity may exceed it downhill.
 @export var push_impulse: float = 2.0
+## Deceleration opposing travel. Roughly 5-10x real rolling resistance: a real board coasts for over
+## a minute, which is not fun. Since slopes went live this number does a SECOND job - it sets which
+## gradients you can rest on. Friction holds you wherever the fall line is weaker than it, i.e. up to
+## asin(rolling_friction / gravity_accel) ~= 3.6 deg at present. Nothing in TestWorld is that gentle,
+## so every ramp here rolls you. Raise this if you want parkable banks.
 @export var rolling_friction: float = 1.0
+## Lateral grip: the deceleration the wheels apply ACROSS their rolling axis. Wheels roll freely
+## along their axis and resist sideways, and that single asymmetry is what produces imperfect-landing
+## drift, the speed cost of carving, and sideways-landing scrub. High values snap a crooked landing
+## straight almost at once; low values let the board slide and drift.
+@export var wheel_side_grip: float = 40.0
+## Sideways speed at touchdown above which the wheels wash out and the rider is thrown.
+##
+## Replaced a fixed 45-135 deg angle window that had NO speed term, so landing at 100 deg while
+## creeping at 0.2 m/s bailed exactly as hard as at 7 m/s. Because the test is on momentum, tolerance
+## now scales with speed on its own: at 7 m/s you get +/-21 deg, at 3 m/s +/-56 deg, and at or below
+## this value any angle is survivable - including a full 90 deg.
+@export var max_landing_slide: float = 2.5
+## Fastest the DIRECTION OF TRAVEL may swing while realigning after a landing, in degrees per second.
+##
+## Full grip on the first grounded frame turned travel by the whole residual in a single tick while
+## the camera eased over eight - a smooth view over a world that jerked, which reads as a harsh
+## landing without looking like a snap. Note this is the fix for that; landing_dip_max is NOT. A
+## straight ollie has the same dead-stop impact as a badly-rotated one and reads as fine, so impact
+## was never the complaint.
+##
+## Caps the ANGULAR rate rather than the lateral force, because the angle is what the eye tracks. A
+## force cap gets the shape backwards: scrubbing removes a fixed slice of lateral speed per frame, so
+## as the remainder shrinks the same slice becomes an ever LARGER angle, and the worst jerk lands on
+## the final frame of the settle. Capping the angle gives a constant, even swing.
+##
+## Independent of the camera. The two once had to match, back when the camera's aim was smoothed
+## while its position was not: the subject left the frame, so any disagreement between how fast the
+## world turned and how fast the view turned was glaring. Now that the camera orbits and keeps the
+## skater centred throughout, this is purely a question of how quickly the wheels drag travel into
+## line, and can be tuned on its own merits.
+##
+## Applies only while realigning from a touchdown. Carving is a STEADY STATE and needs full grip: at
+## full lean the board yaws ~172 deg/s, so a permanent cap here would make every hard turn drift.
+## Same transient-versus-steady-state split the camera needed two rates for.
+@export var landing_turn_rate_deg: float = 60.0
+## Seconds since the last touchdown. Not currently read, but kept as the natural home for anything
+## else that needs to know how fresh a landing is.
+var _since_touchdown: float = 1000.0
+## True while the wheels are still pulling travel back onto the board axis after a landing. A state
+## flag rather than a fixed window deliberately: how long realignment takes depends on the residual
+## AND the speed, so any fixed duration would expire mid-swing on slow, badly-rotated landings and
+## reintroduce the jerk it was added to remove.
+var _realigning: bool = false
 @export var peg_tilt_deg: float = 35.0 # Max ankle peg lean at full stick deflection
+## THE authoritative motion state, in world space. Deliberately not rebuilt from orientation each
+## frame: `velocity = -basis.z * current_speed` made travel and facing the same quantity, so the
+## skater could only ever move exactly where the board pointed. That is what forced landings to snap
+## to a perfect 0/180, made slope gravity impossible to express, and left the sideways-landing test
+## with nothing but an angle to go on.
+##
+## While GROUNDED, y is held at zero and height belongs entirely to the surface snap in step 7, so
+## only the horizontal components are integrated. While AIRBORNE, y is the ballistic vertical speed.
 var velocity: Vector3 = Vector3.ZERO
-var current_speed: float = 0.0
+## Sideways speed at the last touchdown. On the HUD so max_landing_slide can be tuned against real
+## landings rather than guessed at.
+var last_landing_slide: float = 0.0
+
+## Horizontal rolling speed. Derived from `velocity`, never stored alongside it - a scalar speed plus
+## a separate direction is precisely the representation this rewrite removed. Assigning rescales the
+## horizontal velocity in place, so every existing `current_speed = 0.0` and `current_speed *= x`
+## call site keeps working and keeps meaning what it did.
+var current_speed: float:
+	get:
+		return Vector2(velocity.x, velocity.z).length()
+	set(value):
+		var flat := Vector2(velocity.x, velocity.z)
+		var dir: Vector2
+		if flat.length_squared() > 0.00000001:
+			dir = flat.normalized()
+		else:
+			# Stopped, so there is no travel direction to preserve: accelerate along the board.
+			var axis := _board_axis()
+			dir = Vector2(axis.x, axis.z)
+		velocity.x = dir.x * value
+		velocity.z = dir.y * value
+
+## Vertical component of `velocity`, under the name the airborne path and the HUD already used.
+## A bridge, not a second variable: two independent velocity representations is exactly the kind of
+## split that produced this system's earlier bugs.
+var vertical_velocity: float:
+	get: return velocity.y
+	set(value): velocity.y = value
 
 # Foot Push Animation State (Elevated to Y = 0.055 to prevent board collisions).
 # Rest poses are captured from SkaterRig.tscn in _ready() so foot placement has exactly one
@@ -123,6 +272,8 @@ func _ready() -> void:
 	var exclude: Array[RID] = []
 	_probe = SurfaceProbe.new(get_world_3d().direct_space_state, exclude)
 	_measure_catch_cone()
+	_camera_yaw = rotation.y
+	_camera_pos = global_position
 
 ## Resolves how far off-axis the deck may be at touchdown and still be caught. Two independent
 ## physical limits, whichever binds first:
@@ -230,6 +381,104 @@ func _apply_manual_pivot() -> void:
 			offset = Basis(Vector3.UP, board_pivot.rotation.y) * (p - Basis(Vector3.RIGHT, pitch) * p)
 	board_pivot.position = offset
 
+## Eases the chase camera's yaw toward the rig's, so a landing that jumps the rig's heading does not
+## jump the view with it. Deliberately smooths yaw ONLY: the pivot's baked pitch and offset are what
+## frame the shot, and it stays on SkaterRoot rather than BoardPivot so the view never rolls with a
+## ramp or spins with a trick.
+##
+## Chase camera: a spring arm orbiting the skater.
+##
+## THE INVARIANT: position and aim must come from the SAME smoothed yaw. Break it and the subject
+## leaves the frame. It was broken here once, and the failure is worth recording because it did not
+## look like a framing bug - it read as "the pan is too slow". CameraPivot used to CARRY the boom
+## offset, so it sat 2.1 m behind the skater and rotating it spun the camera on the spot, like
+## turning your head while standing still. Rig yaw was inherited rigidly, so on an imperfect landing
+## the camera's POSITION whipped round instantly while only its AIM was smoothed. Measured on a
+## 70 deg landing: the skater sat 60.8 deg off the centre of view - outside the frame entirely - and
+## took 1.2 s to come back. The boom now lives on Camera3D and this node orbits the rig origin, so
+## rotating it walks the camera AROUND the skater while it keeps facing them.
+##
+## Two yaw rates, because ground turns and landing swings want opposite things: steering tracks
+## tightly via camera_follow_speed, while a landing dumps its residual into a spring-damped offset so
+## the view does not jump at the moment of contact.
+func _smooth_camera(delta: float) -> void:
+	# Critically damped spring on the absorbed jump: accel toward zero, minus velocity damping.
+	var accel: float = -camera_recenter_speed * camera_recenter_speed * _camera_jump_offset \
+		- 2.0 * camera_recenter_speed * _camera_jump_vel
+	_camera_jump_vel += accel * delta
+	_camera_jump_offset += _camera_jump_vel * delta
+
+	var target: float = rotation.y + _camera_jump_offset
+	_camera_yaw = lerp_angle(_camera_yaw, target, minf(camera_follow_speed * delta, 1.0))
+	# CameraPivot is a child of SkaterRoot, so its world yaw is rotation.y plus its own local yaw.
+	# Solve for the local angle that lands it on the smoothed world yaw.
+	camera_pivot.rotation.y = angle_difference(rotation.y, _camera_yaw)
+
+	# Follow position, velocity fed forward so constant-speed riding has zero lag and the authored
+	# framing is untouched. Only changes in motion make the camera fall behind.
+	_camera_pos += velocity * delta
+	_camera_pos = _camera_pos.lerp(global_position, minf(camera_position_damp * delta, 1.0))
+	camera_pivot.global_position = _camera_pos
+
+## The wheels' rolling axis in world space, flattened and normalised.
+##
+## Read from the RIG yaw, which is where landing residuals are deposited (see the transfer in
+## _evaluate_touchdown_landing). board_pivot carries only the 0/180 switch-stance flip, and a 180
+## leaves the rolling axis on the same LINE anyway - a board rolls equally well either way round -
+## so it cannot contribute here.
+func _board_axis() -> Vector3:
+	var axis: Vector3 = -global_transform.basis.z
+	axis.y = 0.0
+	if axis.length_squared() < 0.0001:
+		return Vector3.FORWARD
+	return axis.normalized()
+
+## Ground dynamics: slope gravity, wheel grip and rolling friction.
+##
+## These three used to be, respectively: absent entirely, a snap-to-perfect plus a fixed angle bail,
+## and a scalar decrement. They are one function now because they are one phenomenon - a contact
+## patch that is free along one axis, gripping across it, and pulled downhill by gravity.
+##
+## Height is NOT integrated here. While grounded the surface snap owns it outright, so this only ever
+## needs the horizontal projection of the along-slope acceleration, and y is pinned to zero.
+func _apply_ground_forces(delta: float) -> void:
+	velocity.y = 0.0
+	if not surface_hit.valid:
+		return
+
+	# Fall line: gravity with its surface-normal component removed. On flat ground this is exactly
+	# zero, so there is no "am I on a slope" branch anywhere - flat is just the degenerate case.
+	var g: Vector3 = Vector3.DOWN * gravity_accel
+	var fall_line: Vector3 = g - surface_hit.normal * g.dot(surface_hit.normal)
+	var flat := Vector3(velocity.x + fall_line.x * delta, 0.0, velocity.z + fall_line.z * delta)
+
+	# Wheel anisotropy. Everything about imperfect landings falls out of this split: the component
+	# along the rolling axis survives, the component across it is scrubbed off against grip. That
+	# scrub IS the speed penalty - landing 5 deg off costs cos(5 deg), i.e. almost nothing, while
+	# landing 60 deg off costs most of your speed. Carving pays the same toll, which is why steering
+	# now has weight to it.
+	_since_touchdown += delta
+	var axis: Vector3 = _board_axis()
+	var lateral: Vector3 = flat - axis * flat.dot(axis)
+	# While realigning from a landing, cap the lateral force at whatever turns travel no faster than
+	# landing_turn_rate_deg. Lateral speed relates to heading as v_lat ~= speed * angle, so bounding
+	# the force to speed * angular_rate bounds the angle swing directly, at any speed.
+	var grip: float = wheel_side_grip
+	if _realigning:
+		grip = minf(grip, flat.length() * deg_to_rad(landing_turn_rate_deg))
+		if lateral.length() < 0.02:
+			_realigning = false
+	flat += lateral.move_toward(Vector3.ZERO, grip * delta) - lateral
+
+	# Rolling friction opposes travel and can never reverse it. move_toward lands exactly on zero, so
+	# a gradient whose fall line is weaker than friction simply has everything gravity just added
+	# taken back off again, and the skater holds still - no jitter, no static-friction special case,
+	# and no clamp. Steeper than that and the remainder accelerates them downhill; steep enough while
+	# stalled and they roll back down, because nothing here privileges the forward direction.
+	flat = flat.move_toward(Vector3.ZERO, rolling_friction * delta)
+	velocity.x = flat.x
+	velocity.z = flat.z
+
 ## Stops horizontal motion against vertical faces. Probes from truck height in the travel direction.
 func _blocked_by_wall(travel: Vector3) -> bool:
 	if _probe == null or travel.length_squared() < 0.0001:
@@ -251,10 +500,14 @@ func _physics_process(delta: float) -> void:
 	# trick naming). Letting this block flip the flag on proximity skipped all of that whenever the
 	# skater entered the snap band gently - rolling off a low curb left v_speed stuck negative
 	# forever and never resolved the trick name.
+	#
+	# The old first clause here was `if vertical_velocity > 0.05: is_grounded = false`. It had to go
+	# once slopes went live: velocity is no longer purely horizontal in intent, and any test of world
+	# Y against zero misreads a skater rolling uphill as one leaving the ground. It was only ever a
+	# belt-and-braces guard - the pop in step 5 sets is_grounded = false explicitly, and nothing else
+	# can lift the skater off a surface - so removing it costs nothing.
 	surface_hit = _probe_surface()
-	if vertical_velocity > 0.05:
-		is_grounded = false
-	elif not surface_hit.valid:
+	if not surface_hit.valid:
 		is_grounded = false # Nothing underneath - rolled off a ledge, no special case needed.
 	elif is_grounded:
 		is_grounded = global_position.y - _surface_ride_y() <= ground_snap_distance
@@ -265,7 +518,11 @@ func _physics_process(delta: float) -> void:
 	_apply_surface_alignment(delta)
 	# Pass SkaterRoot, not board_pivot: update_stance_facts() reads pivot.get_parent() for the
 	# stationary forward vector, and that parent is now the surface-tilted SurfaceAlign node.
-	input_state.update_stance_facts(board_pivot, left_foot, right_foot, velocity, self)
+	# Horizontal velocity only. `velocity` now carries the ballistic vertical speed too, and during a
+	# pop that term dominates - passing it whole would point the travel vector nearly straight up and
+	# scramble the leading/trailing foot test for the whole flight.
+	input_state.update_stance_facts(board_pivot, left_foot, right_foot,
+		Vector3(velocity.x, 0.0, velocity.z), self)
 	
 	# 2. Push Acceleration Impulses via Face Buttons (latched inputs ensure zero missed taps)
 	if input_state.push_left_triggered or input_state.push_right_triggered:
@@ -282,9 +539,9 @@ func _physics_process(delta: float) -> void:
 			input_state.push_left_triggered = false
 			input_state.push_right_triggered = false
 	
-	# 3. Rolling Resistance / Deceleration when rolling on pavement
+	# 3. Ground dynamics: slope gravity, wheel grip and rolling friction in one pass.
 	if is_grounded:
-		current_speed = maxf(0.0, current_speed - rolling_friction * delta)
+		_apply_ground_forces(delta)
 	
 	# 4. Steering & Stationary Rotation via Trigger Lean (RT - LT) on pavement
 	# Dampen steering by 80% while preparing pop to safely pre-wind aerial spin without swerving off line!
@@ -398,19 +655,28 @@ func _physics_process(delta: float) -> void:
 		
 		# Touchdown onto whatever surface the probe found - ground, curb top, ramp face.
 		if surface_hit.valid and global_position.y <= _surface_ride_y() and vertical_velocity <= 0.0:
+			# Sample the impact BEFORE it is zeroed - it is the only measure of how hard this landing
+			# was, and one line later it is gone.
+			var impact: float = absf(vertical_velocity)
 			global_position.y = _surface_ride_y()
 			vertical_velocity = 0.0
 			is_grounded = true
+			_since_touchdown = 0.0
+			_realigning = true
+			if landing_dip_ref_speed > 0.0:
+				_landing_dip = minf(impact / landing_dip_ref_speed, 1.0) * landing_dip_max
 			current_aerial_spin_rate = 0.0
 			input_state.current_pop_state = FootInputState.PopState.NONE
 			_evaluate_touchdown_landing()
 	
-	# 7. Horizontal Kinematic Motion Execution, blocked by vertical faces.
-	velocity = -global_transform.basis.z * current_speed
-	var travel: Vector3 = velocity * delta
+	# 7. Position integration, blocked by vertical faces. `velocity` is authoritative and is NOT
+	# rebuilt from orientation here - that rebuild was the whole bug. Only the horizontal components
+	# move the skater; while grounded the surface snap just below owns height entirely.
+	var travel: Vector3 = Vector3(velocity.x, 0.0, velocity.z) * delta
 	if _blocked_by_wall(travel):
-		current_speed *= wall_stop_damping
-		velocity = Vector3.ZERO
+		# Scales rather than zeroing so wall_stop_damping keeps meaning "fraction of speed retained".
+		velocity.x *= wall_stop_damping
+		velocity.z *= wall_stop_damping
 	else:
 		global_position += travel
 
@@ -424,6 +690,11 @@ func _physics_process(delta: float) -> void:
 		if active_push_foot == "":
 			left_foot.position = left_foot_rest
 			right_foot.position = right_foot_rest
+
+	# 8c. Let the suspension extend back out, and ease the camera toward the rig's heading.
+	_landing_dip = lerpf(_landing_dip, 0.0, minf(landing_dip_recover * delta, 1.0))
+	surface_align.position.y = -_landing_dip
+	_smooth_camera(delta)
 
 	# 9. Re-seat the board onto its contact axle. Runs last, after every writer of board_pivot pitch
 	# (the pop in step 5, airborne pitch in step 6, grounded manuals just above).
@@ -573,24 +844,45 @@ func _evaluate_touchdown_landing() -> void:
 		current_speed *= cos(deg_to_rad(catch_err))
 		_credit_achieved_rotation()
 
-	# Snap touchdown yaw to nearest 180 orientation with ±45° precision landing window
-	var curr_yaw: float = fmod(board_pivot.rotation_degrees.y, 360.0)
-	if curr_yaw < 0.0:
-		curr_yaw += 360.0
-	
-	# Sideways Landing Bail (perpendicular to momentum between 45° to 135° or 225° to 315°)
-	if (curr_yaw >= 45.0 and curr_yaw <= 135.0) or (curr_yaw >= 225.0 and curr_yaw <= 315.0):
+	# Land on the heading actually achieved, instead of snapping to a perfect 0/180.
+	#
+	# The residual is TRANSFERRED to the rig yaw rather than discarded. board_pivot keeps only the
+	# 0/180 switch-stance flip that every `cos(board_pivot.rotation_degrees.y)` test downstream
+	# depends on, while the rig - which is what _board_axis() reads, what steering turns and what the
+	# camera follows - genuinely points where the rider landed. Land a 180 at 185 deg and you ride
+	# away 5 deg off your old line and have to steer out of it; the error does not silently vanish.
+	#
+	# The trick NAME is unaffected: _finalise_trick_name() already rounds body yaw to half-turns, so
+	# 185 deg still reads as a 180. Naming quantises, physics does not.
+	#
+	# On a tilted surface the rig and pivot yaws are separated by SurfaceAlign's pitch and roll, so
+	# this transfer is exact only on flat ground. At plausible landing residuals and ramp angles the
+	# error stays well under a degree - not worth carrying a quaternion for.
+	var rest_yaw: float = _nearest_multiple(board_pivot.rotation_degrees.y, 180.0)
+	var residual: float = deg_to_rad(board_pivot.rotation_degrees.y - rest_yaw)
+	rotate_y(residual)
+	board_pivot.rotation_degrees.y = fmod(rest_yaw, 360.0)
+	# Hand the jump to the camera to absorb rather than inherit. The rig turns instantly - the board
+	# really is pointing somewhere new the moment it touches down - but the VIEW should not teleport
+	# with it, so the offset cancels the change at this instant and gives it back over the next few
+	# frames. Without this the camera whipped by the whole residual in a single frame.
+	_camera_jump_offset -= residual
+	_camera_jump_vel = 0.0
+
+	# Sideways landing, judged on MOMENTUM rather than angle. Wheels hold only so much lateral speed
+	# before washing out, so the identical 90 deg landing is survivable at walking pace and fatal at
+	# full speed - a distinction the old fixed 45-135 deg window could not express at all. Anything
+	# under the limit is not "forgiven" either: the lateral component is still scrubbed off against
+	# grip by _apply_ground_forces(), so a sketchy landing costs real speed.
+	var flat_v := Vector3(velocity.x, 0.0, velocity.z)
+	var land_axis: Vector3 = _board_axis()
+	last_landing_slide = (flat_v - land_axis * flat_v.dot(land_axis)).length()
+	if last_landing_slide > max_landing_slide:
 		input_state.trick_status_string = "BAIL! (Sideways Landing / Wheel Skid)"
-		current_speed = 0.0 # Speed loss from sideways wheel friction
+		current_speed = 0.0
 		board_pivot.rotation_degrees.x = 0.0
-		board_pivot.rotation_degrees.y = 0.0 if (curr_yaw < 90.0 or curr_yaw > 270.0) else 180.0
 		manual_timer = 0.0
 		return
-		
-	if curr_yaw >= 135.0 and curr_yaw <= 225.0:
-		board_pivot.rotation_degrees.y = 180.0 # Riding Switch / Fakie!
-	else:
-		board_pivot.rotation_degrees.y = 0.0 # Riding Regular Forward!
 
 	var pitch: float = board_pivot.rotation_degrees.x
 	var in_manual_zone: bool = false
