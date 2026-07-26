@@ -28,6 +28,27 @@ var surface_hit: SurfaceProbe.Hit = SurfaceProbe.Hit.new()
 var manual_timer: float = 0.0
 var is_grounded: bool = true
 
+@export_category("Deck Catch Physics")
+## Shoe-rubber-on-griptape friction coefficient. A rider can stamp an off-axis deck flat while its
+## tilt stays inside the friction cone atan(mu); past that the foot slides down the rail rather than
+## flattening it, and the board shoots out. mu = 1.0 is a 45 deg cone.
+##
+## This is what decides whether a flip is landable - NOT whether a fixed-duration flip animation
+## happened to finish. Judging on duration made trick success depend on hang time, so raising a ledge
+## by 5 cm could make a kickflip mathematically impossible to land (see AGENTS.md known bugs).
+@export var grip_friction: float = 1.0
+## Measured from the loaded deck in _ready(), never authored. Half-width and underside height give
+## the roll angle at which a RAIL reaches the ground before the wheels do; rolling past it would
+## drag the deck through the floor, so it caps the catch cone no matter how grippy the shoes are.
+var deck_half_width: float = 0.0
+var deck_underside_y: float = 0.0
+## min(friction cone, rail-strike angle). Resolved once, from geometry, at _ready().
+var catch_cone_deg: float = 45.0
+## How far off its resting orientation the deck was at the last touchdown. 0 is a dead-flat catch,
+## catch_cone_deg is the sketchiest one still rideable. Recorded at the instant of contact because
+## the settle starts erasing it on the very next frame.
+var last_catch_error_deg: float = 0.0
+
 @export_category("Aerial & Jump Physics")
 @export var jump_impulse: float = 5.2
 @export var gravity_accel: float = 16.0
@@ -39,8 +60,25 @@ var vertical_velocity: float = 0.0
 @export var body_spin_speed_deg: float = 554.0
 var target_board_roll: float = 0.0
 var target_board_yaw: float = 0.0
+## Signed deg/s imparted to the deck at the pop, then held constant - airborne there is no torque on
+## the board, so constant angular velocity is the physically correct integration.
+##
+## Both axes are scaled to share ONE trick duration. Driving them at independent fixed rates meant a
+## 360 flip's yaw finished at 0.42 s while its roll was only 253 deg round, so the board visibly
+## stopped spinning and kept flipping, then halted - see AGENTS.md.
+var flip_roll_rate: float = 0.0
+var flip_yaw_rate: float = 0.0
 var current_aerial_spin_rate: float = 0.0
 var is_flip_in_progress: bool = false
+## True while the deck is rotating the last few degrees onto its resting orientation after a late
+## catch. Landing must never teleport the deck flat - an instant snap of up to a full catch cone is
+## precisely the visual pop this phase exists to avoid - so the remaining sweep is integrated at the
+## flip's own angular rate instead.
+var is_flip_settling: bool = false
+## Deck roll / yaw at the instant of the pop, so the rotation the deck ACTUALLY achieved can be
+## measured at touchdown and credited, rather than trusting what was asked for at pop time.
+var _pop_board_roll: float = 0.0
+var _pop_board_yaw: float = 0.0
 ## Raw world body yaw accumulated between pop and touchdown. Rider-normalised only when it is
 ## folded into the trick signature, so this stays comparable with board_pivot.rotation_degrees.y.
 var airborne_body_yaw_deg: float = 0.0
@@ -84,6 +122,41 @@ func _ready() -> void:
 	right_foot_rest = right_foot.position
 	var exclude: Array[RID] = []
 	_probe = SurfaceProbe.new(get_world_3d().direct_space_state, exclude)
+	_measure_catch_cone()
+
+## Resolves how far off-axis the deck may be at touchdown and still be caught. Two independent
+## physical limits, whichever binds first:
+##
+##   1. FRICTION. The rider stamps the deck flat with the sole of a shoe. The contact normal tilts
+##      with the deck, so the flattening force only wins while tan(tilt) <= mu; past that the foot
+##      slides down the rail instead and the board squirts out sideways.
+##   2. GEOMETRY. Roll far enough and the downhill RAIL reaches the ground before the wheels do.
+##      Settling from beyond that angle would visibly drag the deck through the floor.
+##
+## Both are properties of the board and the shoes, not of the world, so nothing here refers to
+## airtime, ledge height, gravity or frame rate - which is the entire point.
+func _measure_catch_cone() -> void:
+	var friction_cone: float = rad_to_deg(atan(maxf(grip_friction, 0.01)))
+	var deck: SkateDeckMesh = board_mesh as SkateDeckMesh
+	var box: AABB = deck.deck_extents() if deck != null else AABB()
+	deck_half_width = maxf(absf(box.position.x), absf(box.end.x))
+	deck_underside_y = box.position.y
+	if deck_half_width <= 0.0001:
+		push_warning("SkaterController: deck shell not measurable (no visible mesh matching \"board\"); "
+			+ "catch cone falls back to the friction cone alone, with no rail-strike clamp.")
+		catch_cone_deg = friction_cone
+		return
+	# Low rail height while rolled by t, in rig-local metres:
+	#     y(t) = deck_underside_y * cos(t) - deck_half_width * sin(t)  ==  R * cos(t + phase)
+	# with R the rail's distance from the roll axis. It touches down when y(t) == -ride_height.
+	# R <= ride_height means the rail can never reach the ground, so only friction binds.
+	var radius: float = sqrt(deck_underside_y * deck_underside_y + deck_half_width * deck_half_width)
+	if radius <= ride_height:
+		catch_cone_deg = friction_cone
+		return
+	var phase: float = atan2(deck_half_width, deck_underside_y)
+	var rail_strike: float = rad_to_deg(acos(clampf(-ride_height / radius, -1.0, 1.0)) - phase)
+	catch_cone_deg = minf(friction_cone, maxf(rail_strike, 0.0))
 
 ## Truck corners in world space, derived from SkaterRoot's YAW ONLY. Deliberately not taken from the
 ## board nodes: those pitch 22 deg on every pop and roll during flips, which would swing the probe
@@ -238,28 +311,53 @@ func _physics_process(delta: float) -> void:
 		else:
 			board_pivot.rotation_degrees.x = 22.0 * stance_sign # Trailing tail pop
 
+		# Where the deck actually was when the trick started, so touchdown can measure what it turned
+		# through rather than assuming it turned through whatever was requested here.
+		_pop_board_roll = board_mesh.rotation_degrees.z
+		_pop_board_yaw = board_mesh.rotation_degrees.y
+
 		# Configure BoardMesh flip & spin targets (Layer 3). Only the deck's own 180 deg yaw reversal
 		# after a Shove-it needs compensating here - Nollie/Fakie flip mirroring is already applied
 		# in FootInputState._build_trick_signature(), so there is no stance term.
+		#
+		# Targets are built off the nearest RESTING orientation, not off the raw current angle: popping
+		# again mid-settle would otherwise bake the few unsettled degrees in permanently, and every
+		# later trick would inherit the error. When the deck is already at rest - the normal case -
+		# rounding is a no-op and the target is unchanged.
+		var roll_rest: float = _nearest_multiple(board_mesh.rotation_degrees.z, 360.0)
+		var yaw_rest: float = _nearest_multiple(board_mesh.rotation_degrees.y, 180.0)
 		var deck_reversed: bool = cos(deg_to_rad(board_mesh.rotation_degrees.y)) < 0.0
 		var roll_sign: float = -1.0 if deck_reversed else 1.0
 		if sig.flip == TrickSignature.Flip.KICK:
-			target_board_roll = board_mesh.rotation_degrees.z + (360.0 * roll_sign)
+			target_board_roll = roll_rest + (360.0 * roll_sign)
 			is_flip_in_progress = true
 		elif sig.flip == TrickSignature.Flip.HEEL:
-			target_board_roll = board_mesh.rotation_degrees.z - (360.0 * roll_sign)
+			target_board_roll = roll_rest - (360.0 * roll_sign)
 			is_flip_in_progress = true
 		else:
-			target_board_roll = board_mesh.rotation_degrees.z
+			target_board_roll = roll_rest
 
 		# Spin magnitude comes from the measured signature, never from the display name.
 		if sig.shuv_deg != 0:
 			var spin_deg: float = 360.0 if absi(sig.shuv_deg) == 360 else 180.0
-			target_board_yaw = board_mesh.rotation_degrees.y + (spin_deg * input_state.last_scoop_sign)
+			target_board_yaw = yaw_rest + (spin_deg * input_state.last_scoop_sign)
 			is_flip_in_progress = true
 		else:
-			target_board_yaw = board_mesh.rotation_degrees.y
+			target_board_yaw = yaw_rest
+
+		# The flip loop now owns BoardMesh; any settle still running is superseded by it.
+		if is_flip_in_progress:
+			is_flip_settling = false
+		_impart_deck_rotation(sig)
 	
+	# 5b. Carry a late-caught deck the last few degrees onto its resting orientation.
+	#
+	# Deliberately BEFORE the flight block, not after it. Touchdown is resolved inside step 6, so a
+	# settle called afterwards would advance on the very frame the flip integrator already advanced,
+	# rotating the deck twice in one tick. Running first means the settle only ever picks up on the
+	# frame after the catch, and the deck turns at exactly one rate at all times.
+	_advance_flip_settle(delta)
+
 	# 6. Apply Custom Gravity, Aerial Pitch Control, 3-Layer Flight Physics & Touchdown
 	if not is_grounded:
 		vertical_velocity -= gravity_accel * delta
@@ -276,13 +374,13 @@ func _physics_process(delta: float) -> void:
 		# Layer 2: Mid-Air Pitch Control (0.20 to 1.00 thumbsticks to angle nose/tail in air)
 		_apply_airborne_board_pitch(delta)
 		
-		# Layer 3: Deck Flip & Spin Authority on BoardMesh with Shoe Hover Catching
+		# Layer 3: Deck Flip & Spin Authority on BoardMesh with Shoe Hover Catching.
+		# Rates were fixed at the pop and are simply integrated here; both axes were scaled to the
+		# same trick duration, so they arrive together on the same frame however they are combined.
 		if is_flip_in_progress:
-			var is_360_spin: bool = absi(input_state.current_trick.shuv_deg) == 360
-			var active_spin_vel: float = spin_speed_deg * 2.0 if absf(target_board_yaw - board_mesh.rotation_degrees.y) > 185.0 or is_360_spin else spin_speed_deg
-			board_mesh.rotation_degrees.z = move_toward(board_mesh.rotation_degrees.z, target_board_roll, flip_speed_deg * delta)
-			board_mesh.rotation_degrees.y = move_toward(board_mesh.rotation_degrees.y, target_board_yaw, active_spin_vel * delta)
-			
+			board_mesh.rotation_degrees.z = move_toward(board_mesh.rotation_degrees.z, target_board_roll, absf(flip_roll_rate) * delta)
+			board_mesh.rotation_degrees.y = move_toward(board_mesh.rotation_degrees.y, target_board_yaw, absf(flip_yaw_rate) * delta)
+
 			# Elevate shoe boxes slightly above spinning deck (Y = 0.18m)
 			left_foot.position.y = lerpf(left_foot.position.y, 0.18, 16.0 * delta)
 			right_foot.position.y = lerpf(right_foot.position.y, 0.18, 16.0 * delta)
@@ -331,6 +429,86 @@ func _physics_process(delta: float) -> void:
 	# (the pop in step 5, airborne pitch in step 6, grounded manuals just above).
 	_apply_manual_pivot()
 
+## Nearest orientation in which the deck is at rest: griptape up for roll (multiples of 360), wheels
+## running along the deck's long axis for yaw (multiples of 180, since a board rides either way).
+static func _nearest_multiple(value: float, step: float) -> float:
+	return roundf(value / step) * step
+
+## Sets the deck's angular velocity for the trick just popped, scaling BOTH axes onto one shared
+## duration so they finish together.
+##
+## A trick is one event: the rider flicks and scoops in a single motion and catches the board once,
+## with both rotations complete. Driving roll and yaw at independent fixed rates broke that - a 360
+## flip's yaw ran at spin_speed_deg * 2 (0.42 s) while its roll ran at flip_speed_deg (0.59 s), so
+## the deck finished spinning a fifth of a second before it finished flipping. On screen the board
+## stopped rotating on one axis mid-trick and kept going on the other, then stopped dead.
+##
+## The duration is the SLOWER of the two axes' natural times, and the faster axis is slowed to match.
+## Scaling to the faster one instead would speed rotations up beyond their tuned reference rates and
+## shorten every combined trick. Single-axis tricks have nothing to reconcile, so their timing is
+## exactly what it always was.
+func _impart_deck_rotation(sig: TrickSignature) -> void:
+	var roll_sweep: float = target_board_roll - board_mesh.rotation_degrees.z
+	var yaw_sweep: float = target_board_yaw - board_mesh.rotation_degrees.y
+	# Reference rate each axis would run at alone. The 360 shuv keeps its historical doubling, which
+	# is what makes a tre flip's scoop read as sharper than its flip rather than lazier.
+	var yaw_ref: float = spin_speed_deg * (2.0 if absi(sig.shuv_deg) == 360 else 1.0)
+	var roll_time: float = absf(roll_sweep) / flip_speed_deg if flip_speed_deg > 0.0 else 0.0
+	var yaw_time: float = absf(yaw_sweep) / yaw_ref if yaw_ref > 0.0 else 0.0
+	var trick_time: float = maxf(roll_time, yaw_time)
+	if trick_time <= 0.0:
+		flip_roll_rate = 0.0
+		flip_yaw_rate = 0.0
+		return
+	flip_roll_rate = roll_sweep / trick_time
+	flip_yaw_rate = yaw_sweep / trick_time
+
+## Rotates a late-caught deck onto its resting orientation at the flip's own angular rate.
+##
+## This is the whole reason a late catch does not look like a glitch. The board is never teleported
+## flat; the rotation it already carried keeps integrating for the few frames it takes to arrive, so
+## on screen the flip simply finishes under the rider's feet as they land - which is what a real late
+## catch looks like. Always rotates the SHORT way to the nearest resting orientation, so a flip that
+## barely started settles back the way it came instead of grinding out a full turn it never earned.
+func _advance_flip_settle(delta: float) -> void:
+	if is_flip_in_progress or not is_flip_settling:
+		return
+	# Recomputed per frame, but stable: move_toward only ever approaches the target, so the nearest
+	# resting orientation cannot change midway.
+	var roll_target: float = _nearest_multiple(board_mesh.rotation_degrees.z, 360.0)
+	var yaw_target: float = _nearest_multiple(board_mesh.rotation_degrees.y, 180.0)
+	# Carry the deck's own angular velocity through the catch rather than switching to a different
+	# rate at the moment of contact - a speed change mid-rotation reads as a hitch even when the
+	# motion stays continuous. Falls back to the reference rates for an axis that was not turning.
+	var roll_rate: float = absf(flip_roll_rate) if absf(flip_roll_rate) > 1.0 else flip_speed_deg
+	var yaw_rate: float = absf(flip_yaw_rate) if absf(flip_yaw_rate) > 1.0 else spin_speed_deg
+	board_mesh.rotation_degrees.z = move_toward(board_mesh.rotation_degrees.z, roll_target, roll_rate * delta)
+	board_mesh.rotation_degrees.y = move_toward(board_mesh.rotation_degrees.y, yaw_target, yaw_rate * delta)
+	if is_equal_approx(board_mesh.rotation_degrees.z, roll_target) \
+			and is_equal_approx(board_mesh.rotation_degrees.y, yaw_target):
+		is_flip_settling = false
+		board_mesh.rotation_degrees.z = fmod(roll_target, 360.0)
+		board_mesh.rotation_degrees.y = fmod(yaw_target, 360.0)
+
+## Rewrites the signature to the rotation the deck ACTUALLY completed.
+##
+## Catching on orientation alone would otherwise credit the full trick however little the deck turned:
+## a board that had barely begun to flip is also within a few degrees of griptape-up, so popping onto
+## a high ledge would land and be named a kickflip. Orientation decides whether it is RIDEABLE; the
+## sweep achieved since the pop decides what it is CALLED. A 360 shuv that only made it half way is
+## credited as the 180 it actually did.
+func _credit_achieved_rotation() -> void:
+	var sig: TrickSignature = input_state.current_trick
+	if sig.flip != TrickSignature.Flip.NONE:
+		var roll_turns: int = int(roundf((board_mesh.rotation_degrees.z - _pop_board_roll) / 360.0))
+		if roll_turns == 0:
+			sig.flip = TrickSignature.Flip.NONE
+	if sig.shuv_deg != 0:
+		var achieved: int = absi(int(roundf((board_mesh.rotation_degrees.y - _pop_board_yaw) / 180.0)))
+		var intended: int = absi(sig.shuv_deg) / 180
+		if achieved < intended:
+			sig.shuv_deg = achieved * 180 * signi(sig.shuv_deg)
+
 func _apply_airborne_board_pitch(delta: float) -> void:
 	var target_pitch_deg: float = 0.0
 	var left_is_front: bool = input_state.leading_foot == FootInputState.Foot.LEFT
@@ -361,17 +539,40 @@ func _evaluate_touchdown_landing() -> void:
 	# Firmly seat shoes onto deck rest coordinates immediately upon ground contact
 	left_foot.position = left_foot_rest
 	right_foot.position = right_foot_rest
-	
-	# Primo / Incomplete Flip Check
-	if is_flip_in_progress:
-		input_state.trick_status_string = "BAIL! (Primo Crash / Incomplete Flip)"
-		current_speed = 0.0
-		board_mesh.rotation_degrees.z = 0.0
-		board_mesh.rotation_degrees.y = 0.0
+	last_catch_error_deg = 0.0
+
+	# Primo / Incomplete Flip Check.
+	#
+	# Judged on where the deck IS, not on whether a fixed-duration animation finished. The old test
+	# was `is_flip_in_progress`, which is true until the deck sweeps a full 360 at flip_speed_deg -
+	# a constant 0.60 s regardless of hang time. Hang time, meanwhile, shrinks with the height gained
+	# from takeoff surface to landing surface, so popping onto a 0.30 m curb gave 0.58 s and every
+	# kickflip onto it bailed one frame short, deterministically. Nothing below reads airtime, ledge
+	# height, gravity or frame rate; re-tuning any of them can no longer make a trick unlandable.
+	if is_flip_in_progress or is_flip_settling:
+		var roll_err: float = absf(board_mesh.rotation_degrees.z - _nearest_multiple(board_mesh.rotation_degrees.z, 360.0))
+		var yaw_err: float = absf(board_mesh.rotation_degrees.y - _nearest_multiple(board_mesh.rotation_degrees.y, 180.0))
+		var catch_err: float = maxf(roll_err, yaw_err)
+		last_catch_error_deg = catch_err
+		if catch_err > catch_cone_deg:
+			input_state.trick_status_string = "BAIL! (Primo Crash / Incomplete Flip)"
+			current_speed = 0.0
+			board_mesh.rotation_degrees.z = 0.0
+			board_mesh.rotation_degrees.y = 0.0
+			is_flip_in_progress = false
+			is_flip_settling = false
+			manual_timer = 0.0
+			return
+		# Caught. Only the component of momentum still aligned with the roll direction survives the
+		# stamp that flattens the deck, so a dead-flat catch keeps everything and one out at the edge
+		# of the cone costs ~30%. Execution deliberately falls through from here into the manual and
+		# landing checks below: the old early `return` skipped them, which is why an incomplete flip
+		# presented as "manuals do not work after a flip trick" rather than as a failed landing.
 		is_flip_in_progress = false
-		manual_timer = 0.0
-		return
-		
+		is_flip_settling = true
+		current_speed *= cos(deg_to_rad(catch_err))
+		_credit_achieved_rotation()
+
 	# Snap touchdown yaw to nearest 180 orientation with ±45° precision landing window
 	var curr_yaw: float = fmod(board_pivot.rotation_degrees.y, 360.0)
 	if curr_yaw < 0.0:

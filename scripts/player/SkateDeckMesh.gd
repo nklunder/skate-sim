@@ -20,8 +20,41 @@ extends Node3D
 @export_range(0.0, 1.0) var grip_grain_bump: float = 0.45 # Micro-shadowing; does the heavy lifting on the grit read
 @export_range(1.0, 4096.0) var grip_grain_scale: float = 720.0
 
+## Kept so the deck shell can be re-measured after the model is built. Decks are swappable and
+## differ in width, length and thickness, so anything that depends on deck geometry must ask rather
+## than assume - see deck_extents().
+var _model_instance: Node3D = null
+
 func _ready() -> void:
 	_setup_skateboard_model()
+
+## Bounding box of the DECK SHELL ONLY (no trucks, no wheels) in BoardMesh-local metres.
+##
+## BoardMesh sits at the rig origin and is the node the flip roll rotates, so this box is already in
+## the frame the roll happens in: `position.x` / `end.x` are the rails, `position.y` is the underside.
+## SkaterController derives the roll angle at which a rail would reach the ground from this, which is
+## why it must be measured rather than hardcoded - a wider deck reaches the ground at a shallower
+## angle, and swapping one in must move that limit with it.
+##
+## Returns an empty AABB when no deck shell can be identified; callers must treat that as "unknown"
+## rather than as zero width.
+func deck_extents() -> AABB:
+	if not is_instance_valid(_model_instance):
+		return AABB()
+	var box := AABB()
+	var found: bool = false
+	for child in _model_instance.get_children():
+		# Same "board" convention _setup_skateboard_model() uses to pick the two-tone shader target.
+		if not (child is MeshInstance3D) or not child.visible:
+			continue
+		var mesh_child: MeshInstance3D = child as MeshInstance3D
+		if mesh_child.mesh == null or not child.name.to_lower().contains("board"):
+			continue
+		# child -> model -> BoardMesh. get_aabb() is child-local, so both hops are needed.
+		var local: AABB = (_model_instance.transform * mesh_child.transform) * mesh_child.get_aabb()
+		box = local if not found else box.merge(local)
+		found = true
+	return box if found else AABB()
 
 func _build_deck_material() -> ShaderMaterial:
 	var mat: ShaderMaterial = ShaderMaterial.new()
@@ -49,6 +82,7 @@ func _setup_skateboard_model() -> void:
 	model_instance.scale = Vector3(model_scale, model_scale, model_scale)
 	model_instance.position = model_offset
 	add_child(model_instance)
+	_model_instance = model_instance
 	
 	if not apply_custom_materials:
 		# Just handle high/low poly deduplication without modifying surfaces

@@ -43,7 +43,14 @@ func _process(_delta: float) -> void:
 	push_lbl.text = "Last Push: %s" % state.last_push_type
 	
 	var deck_roll: float = fmod(skater_controller.board_mesh.rotation_degrees.z, 360.0) if is_instance_valid(skater_controller.board_mesh) else 0.0
-	pitch_lbl.text = "Deck | Pitch: %3.1f° | Roll: %3.0f° (%s)" % [skater_controller.board_pivot.rotation_degrees.x, deck_roll, "AIR" if not skater_controller.is_grounded else "GND"]
+	# Catch error is how far off its resting orientation the deck was at the last touchdown, against
+	# the cone derived from deck geometry and shoe friction. It is what decides landings now, so it
+	# belongs on screen: a run of landings creeping toward the cone is the readable warning that a
+	# gap is getting too big, long before it starts bailing.
+	pitch_lbl.text = "Deck | Pitch: %3.1f° | Roll: %3.0f° (%s) | Catch: %3.0f°/%.0f°" % [
+		skater_controller.board_pivot.rotation_degrees.x, deck_roll,
+		"AIR" if not skater_controller.is_grounded else "GND",
+		skater_controller.last_catch_error_deg, skater_controller.catch_cone_deg]
 	
 	left_stick_lbl.text = "Left Stick   | Mag: %.2f | Ang: %3.0f°" % [state.left_mag, rad_to_deg(state.left_angle)]
 	right_stick_lbl.text = "Right Stick | Mag: %.2f | Ang: %3.0f°" % [state.right_mag, rad_to_deg(state.right_angle)]
