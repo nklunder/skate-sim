@@ -2,7 +2,7 @@ class_name SkateDeckMesh
 extends Node3D
 
 @export_category("Model & Scale Calibration")
-@export var blend_model: PackedScene = preload("res://skateboard.blend")
+@export var blend_model: PackedScene = preload("res://skateboard.glb")
 @export var use_low_poly: bool = true # 8,328 tris vs 646,208 on the high tier; visually indistinguishable at gameplay range
 @export var model_scale: float = 0.1722 # Calibrated so total deck length equals 0.80 m (31.5 inches)
 @export var model_offset: Vector3 = Vector3(-0.32387, -0.35848, 0.11687) # Aligns the deck on X/Z and puts its UNDERSIDE at y=0, i.e. the rig origin
