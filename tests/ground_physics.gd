@@ -97,6 +97,10 @@ const CASES := [
 	# cost SOME speed (that is the weight the rewrite adds) without bleeding the skater dry.
 	{"label": "carve: turns, keeps speed", "speed": -7.0, "settle": 60, "lean": 1.0,
 		"expect_carve": true},
+	# Preserved direction: coasting backward (+Z) to a stop on flat ground must preserve backward travel,
+	# so pushing from zero speed accelerates backward instead of flipping forward (-Z).
+	{"label": "rollback stop preserves push", "speed": 3.0, "settle": 240,
+		"push_at_stop": true, "expect_preserved_push": true},
 ]
 
 func _ready() -> void:
@@ -179,6 +183,9 @@ func _physics_process(_delta: float) -> void:
 func _run_slope_case(c: Dictionary) -> void:
 	_max_lateral = maxf(_max_lateral, _lateral_speed())
 	if c.has("push_every") and _frame % int(c["push_every"]) == 0:
+		_skater.input_state.push_right_triggered = true
+		_pushes += 1
+	if c.has("push_at_stop") and _skater.current_speed < 0.01 and _pushes == 0:
 		_skater.input_state.push_right_triggered = true
 		_pushes += 1
 	if c.has("lean"):
@@ -348,6 +355,12 @@ func _finish_case() -> void:
 		if _max_cam_step > _skater.camera_max_swing_deg / 60.0 + 0.3:
 			problems.append("camera swung %.2f deg in one frame (limit %.2f)" % [
 				_max_cam_step, _skater.camera_max_swing_deg / 60.0])
+	elif c.get("expect_preserved_push", false):
+		detail = "final v_z %.2f m/s (%d pushes after stop)" % [_skater.velocity.z, _pushes]
+		if _pushes < 1:
+			problems.append("never came to a full stop to trigger push")
+		if _skater.velocity.z <= 0.5:
+			problems.append("push after rollback stop propelled forward (vz=%.2f) instead of preserving backward roll" % _skater.velocity.z)
 	else:
 		var bailed: bool = _land_status.begins_with("BAIL")
 		var drift: float = rad_to_deg(angle_difference(

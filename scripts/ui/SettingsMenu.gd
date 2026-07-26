@@ -31,6 +31,18 @@ func _input(event: InputEvent) -> void:
 		elif event.button_index == JOY_BUTTON_B and event.pressed and is_menu_open:
 			toggle_menu()
 			get_viewport().set_input_as_handled()
+		# Toggle checkbox with A/Cross button (Button 0) when already open
+		elif event.button_index == JOY_BUTTON_A and event.pressed and is_menu_open:
+			var focus_owner := get_viewport().gui_get_focus_owner()
+			if focus_owner is BaseButton:
+				var btn: BaseButton = focus_owner as BaseButton
+				if btn.toggle_mode:
+					btn.button_pressed = not btn.button_pressed
+				else:
+					btn.pressed.emit()
+			elif hud_checkbox:
+				hud_checkbox.button_pressed = not hud_checkbox.button_pressed
+			get_viewport().set_input_as_handled()
 	elif event is InputEventKey:
 		# Keyboard fallback for opening/closing settings menu with Escape
 		if event.keycode == KEY_ESCAPE and event.pressed and not event.echo:

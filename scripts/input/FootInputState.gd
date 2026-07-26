@@ -131,9 +131,9 @@ func _poll_inputs() -> void:
 	elif Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_RIGHT) or Input.is_physical_key_pressed(KEY_BRACKETRIGHT):
 		camera_side = 1
 
-	# Push Button polling (Joypad X/Square for Left Foot, A/Cross for Right Foot; V / B for keyboard)
-	var curr_push_left: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_X) or Input.is_physical_key_pressed(KEY_V)
-	var curr_push_right: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_A) or Input.is_physical_key_pressed(KEY_B)
+	# Push Button polling (Joypad Y/Triangle for Left Foot, B/Circle for Right Foot; V / B for keyboard)
+	var curr_push_left: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_Y) or Input.is_physical_key_pressed(KEY_V)
+	var curr_push_right: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_B) or Input.is_physical_key_pressed(KEY_B)
 	
 	# Latch push triggers so button presses aren't dropped before SkaterController evaluation
 	if curr_push_left and not _prev_push_left:
@@ -338,7 +338,7 @@ func _classify_push_strokes() -> void:
 ## `root` is the yaw-carrying SkaterRoot. It is passed explicitly rather than reached via
 ## pivot.get_parent(), which now resolves to the surface-tilted SurfaceAlign node and would skew the
 ## stationary forward vector on any ramp.
-func update_stance_facts(pivot: Node3D, left_foot: Node3D, right_foot: Node3D, vel: Vector3, root: Node3D = null) -> void:
+func update_stance_facts(pivot: Node3D, left_foot: Node3D, right_foot: Node3D, vel: Vector3, root: Node3D = null, travel_axis_sign: float = 1.0) -> void:
 	var nose_pos: Vector3 = pivot.to_global(Vector3(0, 0, -0.35))
 	
 	# Live Mesh-Under-Foot check via distance to Nose
@@ -351,7 +351,7 @@ func update_stance_facts(pivot: Node3D, left_foot: Node3D, right_foot: Node3D, v
 	
 	# Live Trailing / Leading Foot check via velocity or static forward alignment
 	var forward_source: Node3D = root if root != null else pivot.get_parent()
-	var travel_dir: Vector3 = vel.normalized() if vel.length_squared() > 0.05 else -forward_source.global_transform.basis.z
+	var travel_dir: Vector3 = vel.normalized() if vel.length_squared() > 0.05 else -forward_source.global_transform.basis.z * travel_axis_sign
 	var left_dot: float = (left_foot.global_position - pivot.global_position).dot(travel_dir)
 	var right_dot: float = (right_foot.global_position - pivot.global_position).dot(travel_dir)
 	if left_dot > right_dot:

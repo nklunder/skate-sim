@@ -145,6 +145,10 @@ var _camera_target_yaw: float = 0.0
 ## Last heading of travel worth trusting. Updated only above camera_travel_min_speed, so a skater
 ## hanging at the top of a bank keeps the heading they arrived with instead of reading noise.
 var _travel_heading: float = 0.0
+## Persistent travel direction sign along the board's rolling axis (+1.0 for forward, -1.0 for backward).
+## Updated above camera_travel_min_speed so when stalling to a stop, pushing and stance checks preserve
+## rolling direction instead of resetting to static rig forward.
+var _travel_axis_sign: float = 1.0
 ## Damped world position the camera orbits around. NOT simply the skater's position: see
 ## camera_position_damp.
 var _camera_pos: Vector3 = Vector3.ZERO
@@ -513,7 +517,7 @@ func _smooth_camera(delta: float) -> void:
 func _apply_push_impulse() -> void:
 	var axis: Vector3 = _board_axis()
 	var along: float = Vector3(velocity.x, 0.0, velocity.z).dot(axis)
-	var dir: Vector3 = axis if along >= 0.0 else -axis
+	var dir: Vector3 = axis if _travel_axis_sign >= 0.0 else -axis
 	# maxf guards the downhill case: gravity can legitimately carry the skater past max_push_speed,
 	# and a push must never become a brake.
 	var add: float = maxf(0.0, minf(absf(along) + push_impulse, max_push_speed) - absf(along))
@@ -618,6 +622,14 @@ func _physics_process(delta: float) -> void:
 	elif is_grounded:
 		is_grounded = global_position.y - _surface_ride_y() <= ground_snap_distance
 
+	# Update persistent rolling direction along the board's axis above camera_travel_min_speed deadband
+	var flat_vel := Vector2(velocity.x, velocity.z)
+	if flat_vel.length() > camera_travel_min_speed:
+		var axis: Vector3 = _board_axis()
+		var along: float = Vector3(velocity.x, 0.0, velocity.z).dot(axis)
+		if absf(along) > 0.01:
+			_travel_axis_sign = 1.0 if along >= 0.0 else -1.0
+
 	# Synchronize all kinematic animations and stance updates to physics tick
 	_animate_ankle_pegs(delta)
 	_animate_foot_push_stroke(delta)
@@ -628,7 +640,7 @@ func _physics_process(delta: float) -> void:
 	# pop that term dominates - passing it whole would point the travel vector nearly straight up and
 	# scramble the leading/trailing foot test for the whole flight.
 	input_state.update_stance_facts(board_pivot, left_foot, right_foot,
-		Vector3(velocity.x, 0.0, velocity.z), self)
+		Vector3(velocity.x, 0.0, velocity.z), self, _travel_axis_sign)
 	
 	# 2. Push Acceleration Impulses via Face Buttons (latched inputs ensure zero missed taps)
 	if input_state.push_left_triggered or input_state.push_right_triggered:
@@ -1076,7 +1088,12 @@ func _animate_ankle_pegs(delta: float) -> void:
 	# Rotating the stick vector out of screen space and into the pivot's frame keeps the pegs
 	# pointing the way the physical stick is actually pushed at ANY yaw, so they stay honest
 	# part-way through an aerial spin too, not just at 0 deg and 180 deg.
-	var yaw: float = board_pivot.rotation.y
+	#
+	# Extended for direction reversals: when gravity reverses rolling direction and the chase camera
+	# swings 180 deg around SkaterRoot to track travel, camera_pivot.rotation.y changes by PI while
+	# board_pivot.rotation.y remains unaltered. We transform screen-space stick inputs using the relative
+	# angle between camera view and board yaw so pegs stay honest regardless of camera reversals.
+	var yaw: float = angle_difference(camera_pivot.rotation.y, board_pivot.rotation.y)
 	var yaw_cos: float = cos(yaw)
 	var yaw_sin: float = sin(yaw)
 	_drive_ankle_peg(left_peg_pivot, input_state.left_stick_raw, input_state.left_mag, yaw_cos, yaw_sin, delta)
