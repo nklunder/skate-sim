@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tests/carve_and_push.gd" id="1_carve_push"]
+
+[node name="CarveAndPush" type="Node"]
+script = ExtResource("1_carve_push")

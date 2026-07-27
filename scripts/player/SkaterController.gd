@@ -152,6 +152,25 @@ var _foot_frame := FootRig.Frame.new()
 @export_category("Motion & Push Physics")
 @export var max_push_speed: float = 7.0 # Ceiling on PUSHING only - gravity may exceed it downhill.
 @export var push_impulse: float = 2.0
+## How long a push stroke occupies the rider, in seconds. Nominally the same as FootRig's
+## push_anim_duration, but kept here and separate on purpose: this is the PHYSICAL duration, and no
+## gameplay term may be gated on how long an animation happens to run.
+@export var push_stroke_time: float = 0.25
+## Steering authority retained at the START of a push stroke, easing back to full as it finishes.
+##
+## On a real board you cannot carve while pushing, and the reason is anatomical rather than
+## frictional: carving is done by leaning the deck on its bushings, which needs the rider's weight
+## over both trucks. During a push one foot is on the ground and the weight is centred over the
+## front truck, so there is nothing left to lean WITH.
+##
+## Ramped rather than switched. Steering authority returns as the foot comes back to the deck, which
+## is both what actually happens and smoother than a step change - a hard restore at the end of the
+## stroke reads as the board suddenly grabbing.
+@export_range(0.0, 1.0) var push_turn_damping: float = 0.15
+## Seconds since the last push impulse. Also the natural home for a physical push cooldown, if
+## kicking should ever be rate-limited: gate _apply_push_impulse() on this rather than on whether
+## FootRig happens to be mid-stroke.
+var _since_push: float = 1000.0
 ## Deceleration opposing travel. Roughly 5-10x real rolling resistance: a real board coasts for over
 ## a minute, which is not fun. Since slopes went live this number does a SECOND job - it sets which
 ## gradients you can rest on. Friction holds you wherever the fall line is weaker than it, i.e. up to
@@ -470,6 +489,7 @@ func _physics_process(delta: float) -> void:
 	# 1. Where the skater is, and which way they are rolling.
 	_update_grounded_state()
 	_update_travel_axis_sign()
+	_since_push += delta
 
 	_apply_surface_alignment(delta)
 	_update_stance_facts()
@@ -590,6 +610,7 @@ func _apply_push_inputs() -> void:
 		return
 	if is_grounded:
 		_apply_push_impulse()
+		_since_push = 0.0
 		# The animation may REFUSE - both shoes never leave the deck at once, so a press arriving
 		# mid-stroke is dropped. The physical impulse above is applied either way: whether pushing
 		# should also be rate-limited in the physics is a gameplay question, and answering it
@@ -610,6 +631,15 @@ func _apply_push_inputs() -> void:
 func _apply_steering(delta: float) -> void:
 	# Dampen steering by 80% while preparing pop to safely pre-wind aerial spin without swerving off line!
 	var turn_mult: float = 0.2 if input_state.is_preparing_pop() else 1.0
+	# You cannot carve while pushing: carving leans the deck on its bushings, and with one foot on
+	# the ground there is no weight over the back truck to lean with. Eases back to full authority as
+	# the stroke completes rather than snapping, so the board does not suddenly grab.
+	#
+	# Note this damps STEERING only, not the impulse. Whether the push itself should be rate-limited
+	# is a separate gameplay question - see push_stroke_time.
+	if _since_push < push_stroke_time:
+		var recovered: float = _since_push / push_stroke_time
+		turn_mult = minf(turn_mult, lerpf(push_turn_damping, 1.0, recovered))
 	var turn_rate: float = input_state.lean * (input_state.board_config.turn_speed if is_instance_valid(input_state.board_config) else 3.0) * turn_mult
 	if not is_grounded or abs(input_state.lean) <= 0.05:
 		_is_carve_latched = false
@@ -625,7 +655,18 @@ func _apply_steering(delta: float) -> void:
 	if not _is_carve_latched:
 		# Stationary Kickturn: anchor rotation onto trailing rear wheel axle so back tires stay locked to pavement!
 		var left_is_front: bool = input_state.leading_foot == FootInputState.Foot.LEFT
-		var rear_axle_z: float = manual_axle_z if left_is_front else -manual_axle_z
+		# FRAME MISMATCH, and it was a real bug. `leading_foot` is resolved against BoardPivot's basis,
+		# which carries the 0/180 switch-stance flip; the rotation below happens in the RIG's frame,
+		# which does not. Without carrying that flip across, the Z sign inverts whenever the pivot sits
+		# at 180 - which is ALL of switch and fakie, plus anything after a landed body 180, since
+		# _evaluate_touchdown_landing() keeps the yaw's nearest multiple of 180 on the pivot.
+		#
+		# The symptom was precise: _apply_grounded_board_pitch() lifts the LEADING trucks for a
+		# kickturn, so anchoring the leading axle made the airborne truck the pivot and swung the
+		# grounded one around it in a 0.94 m arc. Note _apply_manual_pivot() already gets this right
+		# (it multiplies through Basis(Vector3.UP, board_pivot.rotation.y)), so the two disagreed.
+		var deck_flip: float = 1.0 if cos(board_pivot.rotation.y) >= 0.0 else -1.0
+		var rear_axle_z: float = (manual_axle_z if left_is_front else -manual_axle_z) * deck_flip
 		var axle_local_pos := Vector3(0.0, -(ride_height - wheel_radius), rear_axle_z)
 		var axle_world_before: Vector3 = to_global(axle_local_pos)
 		rotate_y(-turn_rate * delta)
