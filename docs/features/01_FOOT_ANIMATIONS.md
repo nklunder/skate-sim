@@ -17,15 +17,26 @@ Right now, during aerial flip tricks, both shoe boxes ascend straight upward lik
 [Pop Launch] ──► Stage A: Slide & Pocket Flick (0% to 35% airtime) ──► Stage B: Hover Catch Plane ──► Mid-Air Catch Stomp
 ```
 
-#### Stage A: The Slide & Nose Pocket Flick (0% to 35% Jump Ascent)
-- Immediately upon jump release (`_execute_pop`), while the trailing popping foot lifts straight upward off the tail into the hover plane, the **leading foot** (front shoe in Ollies, back shoe in Nollie/Fakie) physically slides forward along the griptape toward the nose tip.
-- Upon reaching the nose pocket, it executes a high-speed diagonal flick extension driven by `TrickSignature.flip` and measured diagonal stick inputs (`flick_tilt_deg` / boned vs. rocketed angles):
-  - **Kickflip Outward Sweep:** Shoe thrusts diagonally outward away from the rider's body plane ($+X$ or $-X$ depending on stance handedness, combined with forward $+Z$ progression) while angling the ankle toe-up by $\approx 15^\circ$.
+#### ⚠️ Frame of Reference (read before implementing anything below)
+Every foot motion in this document is expressed in **LEADING / TRAILING** terms — the rider's frame — never in nose/tail. The two are not interchangeable: a landed Shove-it turns the deck $180^\circ$ under a rider who has not moved, putting the physical tail at the leading edge. `BoardPivot` local space already carries the rider's stance flip, so authoring in this frame makes Switch, Goofy, Nollie and Fakie mirror correctly with no conditional math.
+
+- **Which foot moves, and in which direction** → always leading/trailing (`input_state.leading_foot` / `trailing_foot`).
+- **How far it may travel before running off the end** → nose/tail (`left_foot_over` / `right_foot_over`), because real decks are asymmetric in length and kick. This is the *only* thing nose/tail is for.
+- Axis convention: in `BoardPivot` local space the **leading edge is $-Z$**, the trailing edge $+Z$. Derive the sign from the flicking foot's rest offset rather than hardcoding it.
+
+#### Stage A: The Slide & Pocket Flick (0% to 35% Jump Ascent)
+- Roles are assigned by which stick loaded the pop, never by board geometry:
+  - **Ollie / Switch Ollie** (trailing stick loaded): the **trailing** foot is the popping foot and drives the **trailing** edge down; the **leading** foot is the flicking foot and slides **forward toward the leading edge**.
+  - **Nollie / Fakie Ollie** (leading stick loaded): the **leading** foot is the popping foot and drives the **leading** edge down; the **trailing** foot is the flicking foot and slides **back toward the trailing edge**.
+  - Invariant: *the flicking foot always travels toward the edge opposite the popping foot.*
+- Immediately upon jump release (`_execute_pop`), the popping foot lifts straight upward off its edge into the hover plane while the flicking foot slides along the griptape toward the far pocket.
+- Upon reaching that pocket, it executes a high-speed diagonal flick extension driven by `TrickSignature.flip` and measured diagonal stick inputs (`flick_tilt_deg` / boned vs. rocketed angles):
+  - **Kickflip Outward Sweep:** Shoe thrusts diagonally outward away from the rider's body plane ($\pm X$ depending on stance handedness, combined with progression toward the flicking foot's own edge) while angling the ankle toe-up by $\approx 15^\circ$.
   - **Heelflip Inward Sweep:** Shoe kicks straight inward across the heel rail in front of the rider's toes with a flat-soled horizontal thrust.
 - **Timing Invariant & Flick Speed Scaling:** Stage A uses a **Hybrid Velocity Model** with a calibrated reference floor guaranteed to finish within the initial $30\% \to 45\%$ of jump ascent so shoe boxes clear the deck before griptape completes its first half-rotation. Analog stick deflection speed additively boosts flick velocity, rewarding explosive thumbstick snaps with snappy foot extensions!
 
 #### Stage B: Hover Recovery & Catch Standby (45% to Catch)
-- After reaching peak flick extension, the leading shoe smoothly retracts horizontally back over the deck into the hover plane ($Y = 0.18\text{m}$), anchoring directly above its default rest offset (`left_foot_rest` / `right_foot_rest`) in readiness for mid-air deck capture.
+- After reaching peak flick extension, the flicking shoe smoothly retracts horizontally back over the deck into the hover plane ($Y = 0.18\text{m}$), anchoring directly above its own rest offset (captured per-foot in `FootRig.Channel.rest_position`) in readiness for mid-air deck capture.
 
 #### Stage A Variant: Late Flips (Direct Air-to-Pocket Thrust)
 - When a flip is triggered late ($>30\%$ into jump ascent or while already hovering peacefully at $Y = 0.18\text{m}$), simply running Stage A from the start would force the shoe down through the revolving deck before sliding out.
@@ -33,19 +44,20 @@ Right now, during aerial flip tricks, both shoe boxes ascend straight upward lik
 
 ---
 
-### 2. Shove-it Tail Scoops & Multi-Axis Synergy
+### 2. Shove-it Scoops & Multi-Axis Synergy
 When a trick signature includes horizontal yaw rotation (`sig.shuv_deg != 0`):
-- **Lateral Tail Scoop:** The popping foot does not simply push down vertically and release; during the initial pop frames, it sweeps laterally across the width of the tail ($X$-axis displacement of $\pm 0.15\text{m}$) in the exact signed direction of the thumbstick scoop arc (`input_state.last_scoop_sign`).
-- **Multi-Axis Trick Synergy (Tre Flips & Laser Flips):** In combined tricks like a 360 Flip (`shuv_deg = 360, flip = KICKFLIP`), both procedural animations execute concurrently without requiring custom composite animation assets: the rear foot executes a sharp lateral tail scoop while the front foot simultaneously slides forward and kicks diagonally through the nose pocket!
+- **Lateral Scoop:** The popping foot does not simply push down vertically and release; during the initial pop frames, it sweeps laterally across the width of its edge ($X$-axis displacement of $\pm 0.15\text{m}$) in the exact signed direction of the thumbstick scoop arc (`input_state.last_scoop_sign`).
+- **Multi-Axis Trick Synergy (Tre Flips & Laser Flips):** In combined tricks like a 360 Flip (`shuv_deg = 360, flip = KICKFLIP`), both procedural animations execute concurrently without requiring custom composite animation assets: the **popping** foot executes a sharp lateral scoop across its edge while the **flicking** foot simultaneously slides toward the opposite edge and kicks diagonally through that pocket. This is precisely why `FootRig` holds state **per foot** — one shared state cannot express two feet doing different things.
 
 ---
 
 ### 3. Pre-Pop Crouch & Weight Loading (`LOADING_OLLIE` / `LOADING_NOLLIE`)
 - **Current Behavior:** When pulling down the pop thumbstick, the deck pitches up to $24^\circ$, but shoe boxes remain rigid at static rest offsets.
 - **Target Behavior (Athletic Compression & Lateral Pre-Wind):**
-  - **Tail Foot:** Firmly follows the dipping kicktail tip downward onto pavement ($Y \to 0.0\text{m}$).
-  - **Directional Lateral Pop Synergy (Real-Time Tail Gliding):** When loading pop with horizontal stick deflection ($|\text{stick}.x| > 0.15$ for directional jumping), visually shift and rotate the popping foot across the tail width ($\pm 0.03\text{m}$ along local $X$). This position live-updates continuously every frame up to the moment of takeoff: as the player rolls their thumbstick across the bottom perimeter of the controller, the 3D shoe physically glides across different pockets of the tail in real-time, matching our live-calculated directional leap!
-  - **Front Foot:** Compresses tightly onto the griptape plane while angling its toe upward slightly ($+5^\circ$ to $+10^\circ$ local X rotation).
+  - **Popping Foot:** Firmly follows its dipping edge downward and plants on the **pavement**. Note the deck already pitches to $24^\circ$ under it, which carries a foot at $z = \pm 0.225$ roughly $0.09\text{m}$ down on its own — so this target is the *absolute* ground plane (local $Y \approx -0.078$, i.e. `-ride_height`), reached by compensating for the pitch already applied, not a fixed local offset that would double-count it.
+  - **Directional Lateral Pop Synergy (Real-Time Edge Gliding):** When loading pop with horizontal stick deflection ($|\text{stick}.x| > 0.15$ for directional jumping), visually shift and rotate the popping foot across the width of its edge ($\pm 0.03\text{m}$ along local $X$). This position live-updates continuously every frame up to the moment of takeoff: as the player rolls their thumbstick across the bottom perimeter of the controller, the 3D shoe physically glides across different pockets of the edge in real-time, matching our live-calculated directional leap!
+  - **Flicking Foot:** Compresses tightly onto the griptape plane while angling its toe upward slightly ($+5^\circ$ to $+10^\circ$ local X rotation).
+  - **Threshold:** Crouch engages only past the heavy pop load ($\ge 0.70$, `is_preparing_pop()`); depth then scales continuously from there to $1.0$. Below $0.70$ the feet simply ride the manual pitch as they do today. *(Design decision, 2026-07-27 — revisit during feel tuning.)*
   - **IK Synergy:** This compression clearly telegraphs jump energy before pop release and directly translates into deep athletic knee flexion when our Leg IK chains connect to these shoe boxes!
 
 ---
@@ -62,6 +74,7 @@ When a trick signature includes horizontal yaw rotation (`sig.shuv_deg != 0`):
 
 ## 📐 Architectural Design Rules & Kinematic Invariants
 1. **Local Frame Authority:** All foot positions and rotations MUST remain expressed in `BoardPivot` local space. Because `BoardPivot` handles Switch and Fakie $180^\circ$ yaw inversions natively, expressing flick vectors locally ensures regular and goofy stance maneuvers mirror accurately without redundant conditional math.
+   - **Corollary — rider frame, not board frame.** Roles and directions are assigned from `leading_foot` / `trailing_foot`, never from nose/tail. A landed Shove-it puts the physical tail at the leading edge without the rider moving, so any animation keyed to nose/tail silently mirrors itself after every Shove-it. Nose/tail is consulted **only** to look up how much deck actually exists at a given edge. See the Frame of Reference block in section 1.
 2. **Presentation Sovereignty (Rule #6):** As documented in `FootRig.gd` header notes, this node is strictly for presentation. No physical collision check, ground probe, or velocity calculation may ever read a foot animation position to determine gameplay success or failure. ✅ **Now enforced structurally** — stance classification consumes the shoes' rest offsets, so no live foot position is read anywhere outside `FootRig.gd`.
 3. **Explicit Delta-Time Easing:** Use smooth trigonometric interpolation (sine/cosine impulse arcs) or delta-time easing curves (`lerpf` / `move_toward`) rather than fixed frame counts. This guarantees buttery-smooth footwork regardless of frame rate fluctuations or slow-motion simulation adjustments.
 4. **Grounded Pipeline Protection (Step 8 Invariant):** In `SkaterController.gd` Step 8, calling `foot_rig.settle()` unconditionally on grounded frames would instantly clobber and erase our pre-pop crouch! Grounded settling MUST be guarded by pop intent: `if not foot_rig.is_pushing and not input_state.is_preparing_pop(): foot_rig.settle()`.
