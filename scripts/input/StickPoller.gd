@@ -30,12 +30,23 @@ class Sample extends RefCounted:
 	var push_left_edge: bool = false
 	var push_right_edge: bool = false
 	var pop_edge: bool = false
+	## How fast each stick is being MOVED, in deflection units per second - a flat-out sweep from
+	## centre to rim in a tenth of a second reads about 10.
+	##
+	## Device state rather than a derived fact, which is why it lives here: it needs last frame's raw
+	## sample, and that is the same kind of thing as the button edges above. What it is FOR is the
+	## difference between a lazy flip and an explosive one. Both end at the same stick position, so
+	## no reading of position alone can tell them apart; only the speed of the motion can.
+	var left_speed: float = 0.0
+	var right_speed: float = 0.0
 
 var _prev_push_left: bool = false
 var _prev_push_right: bool = false
 var _prev_space: bool = false
+var _prev_left: Vector2 = Vector2.ZERO
+var _prev_right: Vector2 = Vector2.ZERO
 
-func poll() -> Sample:
+func poll(delta: float) -> Sample:
 	var s := Sample.new()
 
 	# Joypad input + keyboard fallback (WASD for Left Foot, IJKL for Right Foot)
@@ -84,6 +95,14 @@ func poll() -> Sample:
 	var curr_space: bool = Input.is_physical_key_pressed(KEY_SPACE)
 	s.pop_edge = curr_space and not _prev_space
 	_prev_space = curr_space
+
+	# Stick speed, measured after the deadzone so a stick resting on the rim does not report motion
+	# from sensor noise. Guarded on delta because the first tick and a paused frame both give zero.
+	if delta > 0.0:
+		s.left_speed = (s.left - _prev_left).length() / delta
+		s.right_speed = (s.right - _prev_right).length() / delta
+	_prev_left = s.left
+	_prev_right = s.right
 
 	return s
 

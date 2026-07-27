@@ -16,6 +16,17 @@ var flip: Flip = Flip.NONE
 var shuv_deg: int = 0 # Board rotation RELATIVE TO THE BODY. 0, +/-180, +/-360.
 var body_deg: int = 0 # Body rotation. 0, +/-180, +/-360, +/-540 ...
 var flick_tilt_deg: float = 0.0 # Pitch tilt imparted by flick angle (- = boned, + = rocketed)
+## How fast the flicking stick was MOVING when the flick registered, in deflection units per second.
+##
+## The one measurement that separates a lazy flip from an explosive one: both end with the stick in
+## the same place, so no reading of stick POSITION can tell them apart.
+##
+## Measured but not yet consumed - nothing reads it today. It is recorded here rather than computed
+## where it is used because two separate systems are meant to scale off it, and off the SAME number:
+## how fast the shoe whips through its flick arc, and (later) how fast the deck rotates. Sharing one
+## measurement is what keeps the shoe clearing the deck at every intensity, instead of needing a
+## separately calibrated floor speed on each.
+var flick_speed: float = 0.0
 
 # --- Derived -----------------------------------------------------------------
 

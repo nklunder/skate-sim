@@ -140,10 +140,14 @@ var pop_riding_reversed: bool = false
 @onready var surface_align: Node3D = $SurfaceAlign
 @onready var board_pivot: Node3D = $SurfaceAlign/BoardPivot
 @onready var board_mesh: Node3D = $SurfaceAlign/BoardPivot/BoardMesh
-## The rider's feet and every animation that moves them. Presentation only - see FootRig.gd. The
-## controller still reads foot_rig.left_foot / .right_foot for the stance test, which is the one
-## place a foot POSITION feeds a decision.
+## The rider's feet and every animation that moves them. Presentation only - see FootRig.gd, and
+## note that this is now structural rather than a convention: the stance test below consumes the
+## shoes' REST offsets, so no live foot position feeds any decision at all.
 @onready var foot_rig: FootRig = $SurfaceAlign/BoardPivot/FootRig
+## Reused each frame rather than allocated, since it is pure parameter passing. Everything FootRig
+## is allowed to know about the frame it is posing for goes through here - it holds no reference
+## back to this controller.
+var _foot_frame := FootRig.Frame.new()
 
 @export_category("Motion & Push Physics")
 @export var max_push_speed: float = 7.0 # Ceiling on PUSHING only - gravity may exceed it downhill.
@@ -467,8 +471,6 @@ func _physics_process(delta: float) -> void:
 	_update_grounded_state()
 	_update_travel_axis_sign()
 
-	# Kinematic animation and stance facts, synchronised to the physics tick.
-	foot_rig.animate(delta, input_state, camera_pivot.rotation.y, board_pivot.rotation.y)
 	_apply_surface_alignment(delta)
 	_update_stance_facts()
 
@@ -503,17 +505,25 @@ func _physics_process(delta: float) -> void:
 	# 8. Grounded board rotations and middle-zone manuals (only when on pavement).
 	if is_grounded:
 		_apply_grounded_board_pitch(delta)
-		# Overrides whatever the flip hover left behind, but must not fight the push stroke - which
-		# runs earlier in the frame and is the one animation allowed to move a grounded foot.
-		if not foot_rig.is_pushing:
-			foot_rig.settle()
 
-	# 8c. Let the suspension extend back out, then advance the camera.
+	# 8c. Let the suspension extend back out, pose the feet, then advance the camera.
+	#
+	# The feet are solved HERE, once, rather than at the three points through the frame they used to
+	# be spread across (an animate() before step 2, hover/lower inside the flight block, a settle()
+	# in the grounded block). Every fact a foot pose depends on is final by now, so gathering them
+	# into one call is what lets FootRig arbitrate between competing animations inside its own state
+	# machine instead of leaving "which one wins" to be reconstructed from three call sites and
+	# their order. It runs BEFORE the camera so the ankle pegs resolve against the same camera yaw
+	# they always did - they work in the angle between the camera and the board, and the camera has
+	# not moved yet this frame.
 	#
 	# The camera MUST run here, after step 7 has integrated position: it feeds velocity forward and
 	# damps toward global_position, so advancing it earlier would frame where the skater was rather
 	# than where they now are.
 	_recover_landing_dip(delta)
+	_foot_frame.is_grounded = is_grounded
+	_foot_frame.deck_is_spinning = is_flip_in_progress
+	foot_rig.solve(delta, _foot_frame, input_state, camera_pivot.rotation.y, board_pivot.rotation.y)
 	camera_pivot.follow(delta)
 
 	# 9. Re-seat the board onto its contact axle. Runs last, after every writer of board_pivot pitch
@@ -553,16 +563,26 @@ func _update_travel_axis_sign() -> void:
 	if absf(along) > 0.01:
 		_travel_axis_sign = 1.0 if along >= 0.0 else -1.0
 
-## Hands FootInputState the geometry it needs to work out which foot is leading.
+## Hands FootInputState the geometry it needs to work out which foot is leading, and which end of
+## the DECK each shoe is standing on.
+##
+## Passes the shoes' REST offsets, not their live nodes: foot placement is a property of how the
+## rider stands on the board, not of what an animation is doing this instant. See
+## update_stance_facts() for why that distinction is load-bearing.
 ##
 ## Passes SkaterRoot, not board_pivot: update_stance_facts() reads pivot.get_parent() for the
 ## stationary forward vector, and that parent is now the surface-tilted SurfaceAlign node.
 ## Horizontal velocity only. `velocity` now carries the ballistic vertical speed too, and during a
 ## pop that term dominates - passing it whole would point the travel vector nearly straight up and
 ## scramble the leading/trailing foot test for the whole flight.
+##
+## The last argument is whether the DECK is turned 180 deg from rest. Nose and tail are fixed
+## attributes of the board, so a landed shove-it puts the tail at the leading end without moving the
+## rider at all - read the deck's real orientation rather than inferring it from the rider's stance.
 func _update_stance_facts() -> void:
-	input_state.update_stance_facts(board_pivot, foot_rig.left_foot, foot_rig.right_foot,
-		Vector3(velocity.x, 0.0, velocity.z), self, _travel_axis_sign)
+	var deck_reversed: bool = cos(deg_to_rad(board_mesh.rotation_degrees.y)) < 0.0
+	input_state.update_stance_facts(board_pivot, foot_rig.left_rest, foot_rig.right_rest,
+		Vector3(velocity.x, 0.0, velocity.z), self, _travel_axis_sign, deck_reversed)
 
 ## Step 2. Push impulses from the face buttons (latched inputs ensure zero missed taps).
 func _apply_push_inputs() -> void:
@@ -570,6 +590,11 @@ func _apply_push_inputs() -> void:
 		return
 	if is_grounded:
 		_apply_push_impulse()
+		# The animation may REFUSE - both shoes never leave the deck at once, so a press arriving
+		# mid-stroke is dropped. The physical impulse above is applied either way: whether pushing
+		# should also be rate-limited in the physics is a gameplay question, and answering it
+		# silently here by gating on an animation would be exactly the animation-decides-an-outcome
+		# coupling this project has removed everywhere else.
 		if input_state.push_left_triggered:
 			foot_rig.start_push(FootInputState.Foot.LEFT)
 		else:
@@ -694,22 +719,21 @@ func _integrate_flight(delta: float) -> void:
 	# Layer 3: Deck Flip & Spin Authority on BoardMesh with Shoe Hover Catching.
 	# Rates were fixed at the pop and are simply integrated here; both axes were scaled to the
 	# same trick duration, so they arrive together on the same frame however they are combined.
+	# The feet are NOT posed here any more. is_flip_in_progress is handed to FootRig as
+	# `deck_is_spinning` in step 8c, and its state machine decides whether that means hovering clear
+	# of the deck or returning to the rest pose - which is the same choice the hover()/lower() pair
+	# used to make from inside this block, but made in one place alongside every other foot state.
 	if is_flip_in_progress:
 		board_mesh.rotation_degrees.z = move_toward(board_mesh.rotation_degrees.z, target_board_roll, absf(flip_roll_rate) * delta)
 		board_mesh.rotation_degrees.y = move_toward(board_mesh.rotation_degrees.y, target_board_yaw, absf(flip_yaw_rate) * delta)
 
-		# Elevate shoe boxes clear of the spinning deck
-		foot_rig.hover(delta)
-
-		# Catch trick cleanly when deck revolution completes (grip tape facing up)
+		# Catch trick cleanly when deck revolution completes (grip tape facing up). This is the frame
+		# a mid-air catch stomp will be fired from - see 01_FOOT_ANIMATIONS.md section 4.
 		if is_equal_approx(board_mesh.rotation_degrees.z, target_board_roll) and is_equal_approx(board_mesh.rotation_degrees.y, target_board_yaw):
 			is_flip_in_progress = false
 			board_mesh.rotation_degrees.z = fmod(board_mesh.rotation_degrees.z, 360.0)
 			board_mesh.rotation_degrees.y = fmod(board_mesh.rotation_degrees.y, 360.0)
 			input_state.trick_status_string = "Caught in mid-air!"
-	else:
-		# Return shoe boxes to ride rest height when trick is caught or no flip active
-		foot_rig.lower(delta)
 
 	# Touchdown onto whatever surface the probe found - ground, curb top, ramp face.
 	if surface_hit.valid and global_position.y <= _surface_ride_y() and vertical_velocity <= 0.0:
@@ -860,8 +884,10 @@ func _finalise_trick_name() -> void:
 	input_state.last_trick_signature = sig.describe()
 
 func _evaluate_touchdown_landing() -> void:
-	# Firmly seat shoes onto deck rest coordinates immediately upon ground contact
-	foot_rig.settle()
+	# Firmly seat shoes onto deck rest coordinates immediately upon ground contact. An EVENT, which
+	# is why it stays an explicit call here rather than becoming a state the solver infers: the
+	# rider's weight arrives on the deck in a single frame and easing it reads as floating.
+	foot_rig.settle_now()
 	last_catch_error_deg = 0.0
 
 	# Primo / Incomplete Flip Check.

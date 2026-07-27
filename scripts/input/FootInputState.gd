@@ -34,6 +34,10 @@ var left_mag: float = 0.0
 var left_angle: float = 0.0 # Radians via atan2(x, -y)
 var right_mag: float = 0.0
 var right_angle: float = 0.0
+## How fast each stick is moving, in deflection units per second. Sampled onto the trick signature
+## at the moment a flick registers - see TrickSignature.flick_speed.
+var left_stick_speed: float = 0.0
+var right_stick_speed: float = 0.0
 var lean: float = 0.0 # RT - LT
 ## Which side of the skater the chase camera sits on: +1 right, -1 left. Absolute, not a toggle -
 ## d-pad right always picks the right-hand view - so what you get never depends on where you were.
@@ -99,18 +103,20 @@ func front_stick() -> Vector2:
 func back_stick() -> Vector2:
 	return right_stick_raw if leading_foot == Foot.LEFT else left_stick_raw
 
-func _physics_process(_delta: float) -> void:
-	_poll_inputs()
+func _physics_process(delta: float) -> void:
+	_poll_inputs(delta)
 	_update_polar_decomposition()
 	_classify_push_strokes()
 	_detect_pop_load_and_flick()
 
 ## Applies one frame of device state onto the live input values. Everything the hardware knows
 ## enters the input system through this function and no other.
-func _poll_inputs() -> void:
-	var s: StickPoller.Sample = _poller.poll()
+func _poll_inputs(delta: float) -> void:
+	var s: StickPoller.Sample = _poller.poll(delta)
 	left_stick_raw = s.left
 	right_stick_raw = s.right
+	left_stick_speed = s.left_speed
+	right_stick_speed = s.right_speed
 	lean = s.lean
 	# Only on an actual selection, so the sticky side survives frames where the d-pad is idle - and
 	# so anything that sets camera_side from outside the device layer is not clobbered next tick.
@@ -250,7 +256,10 @@ func _build_trick_signature() -> void:
 		# In an Ollie pop, the LEADING foot is the flicking foot
 		flick_stick = front_stick()
 		flick_is_left_foot = left_is_front
-	
+
+	# How hard the rider flicked, taken from the flicking stick at the instant the trick is measured.
+	sig.flick_speed = left_stick_speed if flick_is_left_foot else right_stick_speed
+
 	# Universal Flick Rule: Flicking outward (-X for Left, +X for Right = behind body) = Kickflip; Inward (+X for Left, -X for Right = in front of body) = Heelflip
 	var max_slope: float = tan(deg_to_rad(max_flick_up_angle_deg if flick_stick.y <= 0.0 else max_flick_down_angle_deg))
 	if flick_stick.length() >= 0.25 and absf(flick_stick.y) <= absf(flick_stick.x) * max_slope:
@@ -319,25 +328,51 @@ func _classify_push_strokes() -> void:
 		else:
 			last_push_type = "Standard Push (Trailing)"
 
+## Resolves the two facts that depend on where the rider's feet sit relative to the deck.
+##
+## Both are derived from the shoes' REST OFFSETS, never from their live positions. Foot placement is
+## a property of how the rider stands on the board, not of what an animation is doing this instant,
+## and reading the live nodes coupled the single most load-bearing fact in the input system
+## (`leading_foot` drives pop classification, every pitch sign, front_stick()/back_stick(), push type
+## and the kickturn axle) to a node documented as presentation-only. It also forced FootRig to honour
+## a hand-maintained "the leading foot must never cross Z = 0" invariant on every animation ever
+## written. Rests are constants captured from SkaterRig.tscn, so that whole class of coupling is gone.
+##
 ## `root` is the yaw-carrying SkaterRoot. It is passed explicitly rather than reached via
 ## pivot.get_parent(), which now resolves to the surface-tilted SurfaceAlign node and would skew the
 ## stationary forward vector on any ramp.
-func update_stance_facts(pivot: Node3D, left_foot: Node3D, right_foot: Node3D, vel: Vector3, root: Node3D = null, travel_axis_sign: float = 1.0) -> void:
-	var nose_pos: Vector3 = pivot.to_global(Vector3(0, 0, -0.35))
-	
-	# Live Mesh-Under-Foot check via distance to Nose
-	if left_foot.global_position.distance_squared_to(nose_pos) < right_foot.global_position.distance_squared_to(nose_pos):
+##
+## `deck_reversed` is whether the DECK ITSELF is currently turned 180 deg from its resting
+## orientation - see the nose/tail note below.
+func update_stance_facts(pivot: Node3D, left_rest: Vector3, right_rest: Vector3, vel: Vector3,
+		root: Node3D = null, travel_axis_sign: float = 1.0, deck_reversed: bool = false) -> void:
+	# NOSE and TAIL are fixed attributes of the BOARD, and are not the same question as leading and
+	# trailing. Land a shove-it and the deck has turned 180 deg underneath a rider who has not moved:
+	# the tail is now at the leading end and the nose at the trailing one, while `leading_foot` below
+	# is completely unchanged. The two facts must therefore be derived from different things.
+	#
+	# Which END of the deck a shoe is mounted over is fixed (rest offsets, deck-local -Z is the nose
+	# at rest); whether that end is currently the nose or the tail flips with the deck's own yaw. So
+	# it is an XOR of the two, and the reason it is tracked at all is that real decks are not
+	# symmetric - nose and tail differ in length and kick, and anything drawing or measuring against
+	# that geometry has to know which one it is standing on.
+	var left_at_deck_front: bool = left_rest.z < right_rest.z
+	if left_at_deck_front != deck_reversed:
 		left_foot_over = DeckEnd.NOSE
 		right_foot_over = DeckEnd.TAIL
 	else:
 		left_foot_over = DeckEnd.TAIL
 		right_foot_over = DeckEnd.NOSE
-	
-	# Live Trailing / Leading Foot check via velocity or static forward alignment
+
+	# LEADING and TRAILING are about the rider and the direction of travel, so the deck's own yaw is
+	# irrelevant here - a board rolls equally well either way round. Rest offsets are rotated into
+	# world space by the pivot's basis, which is exactly what (foot.global_position -
+	# pivot.global_position) evaluated to back when the live nodes were read.
 	var forward_source: Node3D = root if root != null else pivot.get_parent()
 	var travel_dir: Vector3 = vel.normalized() if vel.length_squared() > 0.05 else -forward_source.global_transform.basis.z * travel_axis_sign
-	var left_dot: float = (left_foot.global_position - pivot.global_position).dot(travel_dir)
-	var right_dot: float = (right_foot.global_position - pivot.global_position).dot(travel_dir)
+	var basis: Basis = pivot.global_transform.basis
+	var left_dot: float = (basis * left_rest).dot(travel_dir)
+	var right_dot: float = (basis * right_rest).dot(travel_dir)
 	if left_dot > right_dot:
 		leading_foot = Foot.LEFT
 		trailing_foot = Foot.RIGHT
