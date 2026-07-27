@@ -972,11 +972,13 @@ func _apply_grounded_board_pitch(delta: float) -> void:
 	var back: Vector2 = input_state.back_stick()
 	var is_manualing: bool = false
 
-	# Manuals trigger whenever the trailing tail or leading nose stick is deflected (>= 0.20), supporting full radial scoops without dropping!
-	if back.y >= 0.20 or (input_state.current_pop_state == FootInputState.PopState.LOADING_OLLIE and back.length() >= 0.20):
+	var was_manualing: bool = manual_timer >= manual_entry_delay or abs(board_pivot.rotation_degrees.x) > 2.0
+
+	# Flatground Entry requires the middle balance zone (0.20 to 0.90). Once an active manual is established, ANY trailing/leading stick load (>= 0.20) latches balance so scoops and heavy pops don't drop!
+	if (not was_manualing and back.y > 0.20 and back.y <= 0.90) or (was_manualing and (back.y >= 0.20 or (input_state.current_pop_state == FootInputState.PopState.LOADING_OLLIE and back.length() >= 0.20))):
 		target_pitch_deg = minf(1.0, back.length()) * 24.0
 		is_manualing = true
-	elif front.y <= -0.20 or (input_state.current_pop_state == FootInputState.PopState.LOADING_NOLLIE and front.length() >= 0.20):
+	elif (not was_manualing and front.y < -0.20 and front.y >= -0.90) or (was_manualing and (front.y <= -0.20 or (input_state.current_pop_state == FootInputState.PopState.LOADING_NOLLIE and front.length() >= 0.20))):
 		target_pitch_deg = -minf(1.0, front.length()) * 24.0
 		is_manualing = true
 		
