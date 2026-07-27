@@ -15,6 +15,7 @@ var pop: Pop = Pop.OLLIE
 var flip: Flip = Flip.NONE
 var shuv_deg: int = 0 # Board rotation RELATIVE TO THE BODY. 0, +/-180, +/-360.
 var body_deg: int = 0 # Body rotation. 0, +/-180, +/-360, +/-540 ...
+var flick_tilt_deg: float = 0.0 # Pitch tilt imparted by flick angle (- = boned, + = rocketed)
 
 # --- Derived -----------------------------------------------------------------
 

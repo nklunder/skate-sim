@@ -1,6 +1,7 @@
-[gd_scene load_steps=3 format=3]
+[gd_scene load_steps=4 format=3]
 
 [ext_resource type="Script" path="res://scripts/ui/DebugHUD.gd" id="1_hud_script"]
+[ext_resource type="Script" path="res://scripts/ui/StickZoneDiagram.gd" id="2_diagram_script"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
 content_margin_left = 16.0
@@ -30,26 +31,13 @@ theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
 
 [node name="VBoxContainer" type="VBoxContainer" parent="Panel"]
 layout_mode = 2
-theme_override_constants/separation = 5
-
-[node name="TitleLabel" type="Label" parent="Panel/VBoxContainer"]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.3, 0.75, 1, 1)
-theme_override_font_sizes/font_size = 18
-text = "SKATE SIM V2 - TELEMETRY"
-
-[node name="HSeparator0" type="HSeparator" parent="Panel/VBoxContainer"]
-layout_mode = 2
-
-[node name="TrickStatusLabel" type="Label" parent="Panel/VBoxContainer"]
-layout_mode = 2
-theme_override_colors/font_color = Color(1, 0.85, 0.3, 1)
-theme_override_font_sizes/font_size = 15
-text = "Trick State: Grounded"
+theme_override_constants/separation = 4
 
 [node name="LastPopLabel" type="Label" parent="Panel/VBoxContainer"]
 layout_mode = 2
-text = "Last Combo: None"
+theme_override_colors/font_color = Color(1, 0.85, 0.3, 1)
+theme_override_font_sizes/font_size = 16
+text = "Last Trick: None"
 
 [node name="AltitudeLabel" type="Label" parent="Panel/VBoxContainer"]
 layout_mode = 2
@@ -126,3 +114,29 @@ text = "Surface: -"
 layout_mode = 2
 text = "Signature: -"
 autowrap_mode = 3
+
+[node name="HSeparator4" type="HSeparator" parent="Panel/VBoxContainer"]
+layout_mode = 2
+
+[node name="ZoneLegendLabel" type="RichTextLabel" parent="Panel/VBoxContainer"]
+layout_mode = 2
+bbcode_enabled = true
+text = "[center][font_size=11][color=#33e666]■ Kickflip[/color]  [color=#ff8033]■ Heelflip[/color]  [color=#4db3ff]■ Ollie/Level[/color]  [color=#ffcc33]■ Pop[/color]  [color=#33ccff]■ 180 Shuv[/color]  [color=#cc4dff]■ 360 Shuv[/color][/font_size][/center]"
+fit_content = true
+
+[node name="DiagramsContainer" type="HBoxContainer" parent="Panel/VBoxContainer"]
+custom_minimum_size = Vector2(0, 110)
+layout_mode = 2
+theme_override_constants/separation = 16
+alignment = 1
+
+[node name="PopStickDiagram" type="Control" parent="Panel/VBoxContainer/DiagramsContainer"]
+custom_minimum_size = Vector2(150, 110)
+layout_mode = 2
+script = ExtResource("2_diagram_script")
+
+[node name="FlickStickDiagram" type="Control" parent="Panel/VBoxContainer/DiagramsContainer"]
+custom_minimum_size = Vector2(150, 110)
+layout_mode = 2
+script = ExtResource("2_diagram_script")
+is_flick_stick = true

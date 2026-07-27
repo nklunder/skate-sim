@@ -17,6 +17,16 @@ enum DeckEnd { NOSE, TAIL }
 @export var shuv_180_threshold_deg: float = 40.0 # Standard scoop buffer window (40° to 94°)
 @export var shuv_360_threshold_deg: float = 95.0 # Deep scoop buffer window (>= 95°)
 
+@export_category("Flick Tilt & Styling")
+## Maximum angle above horizontal (in degrees) allowed for upward/boned flip flicks. Capping this preserves the vertical Ollie forgiveness zone.
+@export_range(30.0, 75.0) var max_flick_up_angle_deg: float = 60.0
+## Maximum angle below horizontal (in degrees) allowed for downward/rocketed flip flicks.
+@export_range(15.0, 60.0) var max_flick_down_angle_deg: float = 45.0
+## Maximum downward nose pitch (in degrees) when flicking high toward the nose (-Y thumbstick).
+@export_range(-45.0, 0.0) var max_boned_tilt_deg: float = -18.0
+## Maximum upward nose pitch (in degrees) when flicking low/backward (+Y thumbstick).
+@export_range(0.0, 45.0) var max_rocketed_tilt_deg: float = 18.0
+
 # Live Input Values
 var left_stick_raw: Vector2 = Vector2.ZERO
 var right_stick_raw: Vector2 = Vector2.ZERO
@@ -274,11 +284,18 @@ func _build_trick_signature() -> void:
 		flick_is_left_foot = left_is_front
 	
 	# Universal Flick Rule: Flicking outward (-X for Left, +X for Right = behind body) = Kickflip; Inward (+X for Left, -X for Right = in front of body) = Heelflip
-	if flick_stick.length() >= 0.25 and abs(flick_stick.y) <= abs(flick_stick.x):
+	var max_slope: float = tan(deg_to_rad(max_flick_up_angle_deg if flick_stick.y <= 0.0 else max_flick_down_angle_deg))
+	if flick_stick.length() >= 0.25 and absf(flick_stick.y) <= absf(flick_stick.x) * max_slope:
 		if flick_is_left_foot:
 			active_flip_type = "Kickflip" if flick_stick.x < 0.0 else "Heelflip"
 		else:
 			active_flip_type = "Kickflip" if flick_stick.x > 0.0 else "Heelflip"
+		
+		var tilt_ratio: float = clampf((flick_stick.y / absf(flick_stick.x)) / max_slope, -1.0, 1.0)
+		if tilt_ratio < 0.0:
+			sig.flick_tilt_deg = absf(tilt_ratio) * max_boned_tilt_deg
+		else:
+			sig.flick_tilt_deg = tilt_ratio * max_rocketed_tilt_deg
 	elif Input.is_physical_key_pressed(KEY_Z) or Input.is_physical_key_pressed(KEY_F):
 		active_flip_type = "Kickflip"
 	elif Input.is_physical_key_pressed(KEY_X) or Input.is_physical_key_pressed(KEY_G):

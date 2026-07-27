@@ -3,7 +3,6 @@ extends Control
 
 @export var skater_controller: SkaterController
 
-@onready var trick_lbl: Label = $Panel/VBoxContainer/TrickStatusLabel
 @onready var pop_lbl: Label = $Panel/VBoxContainer/LastPopLabel
 @onready var alt_lbl: Label = $Panel/VBoxContainer/AltitudeLabel
 @onready var speed_lbl: Label = $Panel/VBoxContainer/SpeedLabel
@@ -19,6 +18,8 @@ extends Control
 @onready var mesh_lbl: Label = $Panel/VBoxContainer/MeshUnderFootLabel
 @onready var surface_lbl: Label = $Panel/VBoxContainer/SurfaceLabel
 @onready var sig_lbl: Label = $Panel/VBoxContainer/SignatureLabel
+@onready var pop_diagram: Control = $Panel/VBoxContainer/DiagramsContainer/PopStickDiagram
+@onready var flick_diagram: Control = $Panel/VBoxContainer/DiagramsContainer/FlickStickDiagram
 
 func _ready() -> void:
 	if not skater_controller:
@@ -31,8 +32,7 @@ func _process(_delta: float) -> void:
 		return
 	var state: FootInputState = skater_controller.input_state
 	
-	trick_lbl.text = "Trick Status: %s" % state.trick_status_string
-	pop_lbl.text = "Last Combo: %s" % state.last_combo_string
+	pop_lbl.text = "Last Trick: %s" % state.last_combo_string
 	# Height above the surface the skater is actually over, not raw world Y - the two only agreed
 	# back when the world was a single flat plane.
 	var air_gap: float = skater_controller.global_position.y - skater_controller.ride_height
@@ -40,10 +40,16 @@ func _process(_delta: float) -> void:
 		air_gap = skater_controller.global_position.y - skater_controller.surface_hit.position.y - skater_controller.ride_height
 	alt_lbl.text = "Height: %s m | V-Speed: %s m/s" % [_fmt(air_gap), _fmt(skater_controller.vertical_velocity)]
 	
-	# Slide is the sideways speed at the last touchdown, against the limit that decides a wash-out.
-	# Shown so max_landing_slide can be tuned against landings you actually felt were fair or unfair.
-	speed_lbl.text = "Speed: %.2f m/s (Max: %.1f) | Slide: %.2f/%.1f" % [
+	# TWO sideways-speed readings, and the labels have to keep them apart. "Last slide" is a LATCHED
+	# sample taken at touchdown and held until the next one, shown against the limit that decides a
+	# wash-out so max_landing_slide can be tuned against landings you actually felt were fair or
+	# unfair. It is SUPPOSED to persist. Labelled just "Slide" it read as live instead, so a landing
+	# number still sitting there while the skater rolled away clean looked exactly like grip failing
+	# to scrub the drift off - a physics leak that was never there. "Slip" is the live value, and is
+	# what actually answers "am I still drifting?": it decays to zero within about half a second.
+	speed_lbl.text = "Speed: %.2f m/s (Max: %.1f) | Slip: %.2f | Last slide: %.2f/%.1f" % [
 		skater_controller.current_speed, skater_controller.max_push_speed,
+		skater_controller.lateral_speed,
 		skater_controller.last_landing_slide, skater_controller.max_landing_slide]
 	push_lbl.text = "Last Push: %s" % state.last_push_type
 	
@@ -80,6 +86,11 @@ func _process(_delta: float) -> void:
 
 	# Paste these values straight into TrickNames.TABLE to name the trick you just landed.
 	sig_lbl.text = "Signature: %s" % state.last_trick_signature
+	
+	if is_instance_valid(pop_diagram):
+		pop_diagram.update_telemetry(state)
+	if is_instance_valid(flick_diagram):
+		flick_diagram.update_telemetry(state)
 
 ## Formats a float without the "-0.00" flicker. Raycast results carry ~1e-8 of float noise, and
 ## "%.2f" faithfully renders its sign, so a perfectly stable surface reads as jittering between

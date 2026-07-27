@@ -286,6 +286,19 @@ var current_speed: float:
 	get:
 		return Vector2(velocity.x, velocity.z).length()
 
+## LIVE sideways speed across the wheels' rolling axis - the quantity grip is actively scrubbing off
+## right now. Computed, never stored, for the same reason `current_speed` is: `velocity` plus the rig
+## yaw already determine it completely, and a cached copy could disagree with them.
+##
+## Distinct from `last_landing_slide`, which is a LATCHED sample of this taken at touchdown and held
+## until the next one. Conflating the two is what made a stale HUD reading look like a physics leak:
+## the snapshot is meant to persist, and the live value decays to zero within about half a second.
+var lateral_speed: float:
+	get:
+		var flat := Vector3(velocity.x, 0.0, velocity.z)
+		var axis: Vector3 = _board_axis()
+		return (flat - axis * flat.dot(axis)).length()
+
 ## Vertical component of `velocity`, under the name the airborne path and the HUD already used.
 ## A bridge, not a second variable: two independent velocity representations is exactly the kind of
 ## split that produced this system's earlier bugs.
@@ -903,6 +916,10 @@ func _apply_airborne_board_pitch(delta: float) -> void:
 	var left_is_front: bool = input_state.leading_foot == FootInputState.Foot.LEFT
 	var front: Vector2 = input_state.front_stick()
 	var back: Vector2 = input_state.back_stick()
+	var sig: TrickSignature = input_state.current_trick
+
+	if sig and sig.flip != TrickSignature.Flip.NONE and is_flip_in_progress:
+		target_pitch_deg = sig.flick_tilt_deg
 
 	if back.y > 0.15:
 		target_pitch_deg = back.y * 24.0 # Tail dip (trailing edge)
