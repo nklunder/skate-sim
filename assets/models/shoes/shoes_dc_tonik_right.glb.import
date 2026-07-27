@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://dpwagjjqj8mrh"
-path="res://.godot/imported/skateboard.glb-e6ab42df330774bc69c85c003019e38b.scn"
+uid="uid://caw5e8434e00r"
+path="res://.godot/imported/shoes_dc_tonik_right.glb-fff93897fb55579d45f2a42242442c24.scn"
 
 [deps]
 
-source_file="res://skateboard.glb"
-dest_files=["res://.godot/imported/skateboard.glb-e6ab42df330774bc69c85c003019e38b.scn"]
+source_file="res://assets/models/shoes/shoes_dc_tonik_right.glb"
+dest_files=["res://.godot/imported/shoes_dc_tonik_right.glb-fff93897fb55579d45f2a42242442c24.scn"]
 
 [params]
 

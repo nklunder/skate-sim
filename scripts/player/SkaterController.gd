@@ -974,11 +974,13 @@ func _apply_grounded_board_pitch(delta: float) -> void:
 
 	var was_manualing: bool = manual_timer >= manual_entry_delay or abs(board_pivot.rotation_degrees.x) > 2.0
 
-	# Flatground Entry requires the middle balance zone (0.20 to 0.90). Once an active manual is established, ANY trailing/leading stick load (>= 0.20) latches balance so scoops and heavy pops don't drop!
-	if (not was_manualing and back.y > 0.20 and back.y <= 0.90) or (was_manualing and (back.y >= 0.20 or (input_state.current_pop_state == FootInputState.PopState.LOADING_OLLIE and back.length() >= 0.20))):
+	# Flatground Manual Entry requires interior balance zone (0.20 to 0.90 vector length) and no active scoop arc (max_swept_angle < 10.0), ensuring outer-rim Shove-it and Varial scoops never lift the nose!
+	# Once an active manual is established, ANY trailing/leading stick load (>= 0.20) latches balance so scoops and heavy pops out of manuals don't drop!
+	var no_scoop: bool = input_state.max_swept_angle < 10.0
+	if (not was_manualing and back.y > 0.20 and back.length() <= 0.90 and no_scoop) or (was_manualing and (back.y >= 0.20 or (input_state.current_pop_state == FootInputState.PopState.LOADING_OLLIE and back.length() >= 0.20))):
 		target_pitch_deg = minf(1.0, back.length()) * 24.0
 		is_manualing = true
-	elif (not was_manualing and front.y < -0.20 and front.y >= -0.90) or (was_manualing and (front.y <= -0.20 or (input_state.current_pop_state == FootInputState.PopState.LOADING_NOLLIE and front.length() >= 0.20))):
+	elif (not was_manualing and front.y < -0.20 and front.length() <= 0.90 and no_scoop) or (was_manualing and (front.y <= -0.20 or (input_state.current_pop_state == FootInputState.PopState.LOADING_NOLLIE and front.length() >= 0.20))):
 		target_pitch_deg = -minf(1.0, front.length()) * 24.0
 		is_manualing = true
 		

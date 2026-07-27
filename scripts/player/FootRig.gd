@@ -28,8 +28,8 @@ extends Node
 ## Rate the feet lerp toward whichever pose is being asked for.
 @export var foot_follow_speed: float = 16.0
 
-@onready var left_foot: MeshInstance3D = $"../LeftFoot"
-@onready var right_foot: MeshInstance3D = $"../RightFoot"
+@onready var left_foot: Node3D = $"../LeftFoot"
+@onready var right_foot: Node3D = $"../RightFoot"
 @onready var left_peg_pivot: Node3D = $"../LeftFoot/PegPivot"
 @onready var right_peg_pivot: Node3D = $"../RightFoot/PegPivot"
 

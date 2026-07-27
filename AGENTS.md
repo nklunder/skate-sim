@@ -94,13 +94,13 @@
 - **Rule — Only Touchdown Path May Ground the Skater:** Proximity checks may keep `is_grounded` true but never flip it false $\to$ true. Grounding belongs exclusively to touchdown branches that zero vertical velocity and call `_evaluate_touchdown_landing()`.
 
 ### 3. `res://scripts/player/SkateDeckMesh.gd` & Deck Shaders
-- Extends `Node3D` and preloads standalone asset `res://skateboard.glb` (exported via Blender CLI from `res://skateboard.blend`).
+- Extends `Node3D` and preloads standalone asset `res://assets/models/decks/skateboard.glb`.
 - Applies precision scale calibration (`0.1722`) and centering offsets (`Vector3(-0.3239, -0.3585, 0.1169)`) to match an 80 cm real-world deck seated beneath shoes at `Y = 0.055m`.
 - **LOD Tiers & Shader:** Low tier (`use_low_poly = true`, default `8,328` tris) synthesizes tangents on import. Both top and bottom share a single mesh surface; color split (griptape top vs high-vis orange underside `Color(0.95, 0.30, 0.02)`) is executed per-fragment off model-space normals in `deck_two_tone.gdshader`.
 
-### 4. `res://scenes/player/SkaterRig.tscn` (Scene Tree & Telemetry UI)
+### 4. `res://scenes/player/SkaterRig.tscn` & `ShoeMesh.gd` (Scene Tree & 3D Foot Assets)
 - Contains `BoardPivot`, `BoardMesh`, truck contact raycasts, foot nodes (`LeftFoot`, `RightFoot`), the `FootRig` driver node, and `CameraPivot` (which carries `ChaseCamera.gd`).
-- Foot meshes represent US 11 M shoes (`28 cm` length, `9.8 cm` width, `3.8 cm` height) seated at `X = -0.025m` to balance toe/heel overhang.
+- **3D Foot Assets (`ShoeMesh.gd`):** `LeftFoot` and `RightFoot` are `Node3D` containers driven by `ShoeMesh.gd`, dynamically instantiating `res://assets/models/shoes/shoes_dc_tonik_right.glb` seated at `X = -0.025m` to balance toe/heel overhang. Automatic scale mirroring (`is_left_shoe = true`) matches left and right shoe silhouettes, while diagnostic albedo tinting preserves testing telemetry (Blue tint for Left Foot / Triangle push, Red tint for Right Foot / Circle push).
 - **Rule:** `left_foot_rest` / `right_foot_rest` are captured from this scene in `FootRig._ready()`. Never re-hardcode foot rest offsets in script.
 - **Shadow Tuning:** `DirectionalLight3D` runs tuned biases (`shadow_bias = 0.02`, `shadow_normal_bias = 0.1`, `directional_shadow_max_distance = 25.0`) to prevent peter-panning at centimeter scale. `AnklePeg` meshes have `cast_shadow = 0` (OFF).
 

@@ -6,6 +6,7 @@
 [ext_resource type="Script" path="res://scripts/player/SkateDeckMesh.gd" id="4_deck_mesh"]
 [ext_resource type="Script" path="res://scripts/player/ChaseCamera.gd" id="5_chase_camera"]
 [ext_resource type="Script" path="res://scripts/player/FootRig.gd" id="6_foot_rig"]
+[ext_resource type="Script" path="res://scripts/player/ShoeMesh.gd" id="7_shoe_mesh"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_foot"]
 size = Vector3(0.231, 0.038, 0.098)
@@ -44,15 +45,11 @@ board_config = ExtResource("3_config")
 [node name="BoardMesh" type="Node3D" parent="SurfaceAlign/BoardPivot"]
 script = ExtResource("4_deck_mesh")
 
-[node name="LeftFoot" type="MeshInstance3D" parent="SurfaceAlign/BoardPivot"]
+[node name="LeftFoot" type="Node3D" parent="SurfaceAlign/BoardPivot"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.025, 0.055, -0.25)
-mesh = SubResource("BoxMesh_foot")
-surface_material_override/0 = SubResource("StandardMaterial3D_foot_l")
-
-[node name="ToeTip" type="MeshInstance3D" parent="SurfaceAlign/BoardPivot/LeftFoot"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.1155, 0, 0)
-mesh = SubResource("CylinderMesh_toe")
-surface_material_override/0 = SubResource("StandardMaterial3D_foot_l")
+script = ExtResource("7_shoe_mesh")
+is_left_shoe = true
+tint_color = Color(0.3, 0.6, 1, 1)
 
 [node name="PegPivot" type="Node3D" parent="SurfaceAlign/BoardPivot/LeftFoot"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.075, 0.019, 0)
@@ -63,15 +60,11 @@ cast_shadow = 0
 mesh = SubResource("CylinderMesh_peg")
 surface_material_override/0 = SubResource("StandardMaterial3D_peg")
 
-[node name="RightFoot" type="MeshInstance3D" parent="SurfaceAlign/BoardPivot"]
+[node name="RightFoot" type="Node3D" parent="SurfaceAlign/BoardPivot"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.025, 0.055, 0.25)
-mesh = SubResource("BoxMesh_foot")
-surface_material_override/0 = SubResource("StandardMaterial3D_foot_r")
-
-[node name="ToeTip" type="MeshInstance3D" parent="SurfaceAlign/BoardPivot/RightFoot"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.1155, 0, 0)
-mesh = SubResource("CylinderMesh_toe")
-surface_material_override/0 = SubResource("StandardMaterial3D_foot_r")
+script = ExtResource("7_shoe_mesh")
+is_left_shoe = false
+tint_color = Color(1, 0.35, 0.35, 1)
 
 [node name="PegPivot" type="Node3D" parent="SurfaceAlign/BoardPivot/RightFoot"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.075, 0.019, 0)
