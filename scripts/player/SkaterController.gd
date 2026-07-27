@@ -25,6 +25,15 @@ var surface_hit: SurfaceProbe.Hit = SurfaceProbe.Hit.new()
 @export_category("Manual & Pitch Tolerances")
 @export var manual_entry_delay: float = 0.08
 @export var max_landing_tolerance_deg: float = 15.0
+## Deck pitch at full manual extension, and the ceiling airborne stick pitch works against.
+@export var max_pitch_deg: float = 24.0
+## Kicktail angle snapped to at the instant of a pop.
+@export var pop_pitch_deg: float = 22.0
+## Stick deflection below which airborne pitch input is ignored.
+@export var pitch_stick_deadzone: float = 0.15
+## Lerp rates the deck pitches toward its target at, airborne and grounded.
+@export var airborne_pitch_follow: float = 14.0
+@export var grounded_pitch_follow: float = 16.0
 ## Speed threshold (in m/s) below which trigger turns lift front trucks for a stationary kickturn instead of carving.
 @export var kickturn_max_speed: float = 0.5
 ## Automatic board pitch angle (in degrees) when initiating a slow-speed kickturn to lift the front wheels.
@@ -156,6 +165,9 @@ var _foot_frame := FootRig.Frame.new()
 ## push_anim_duration, but kept here and separate on purpose: this is the PHYSICAL duration, and no
 ## gameplay term may be gated on how long an animation happens to run.
 @export var push_stroke_time: float = 0.25
+## Steering authority retained while loading a pop, when the rider's weight has shifted onto the
+## tail ready to snap it down. Registered as a contributor in _lean_authority().
+@export_range(0.0, 1.0) var pop_load_turn_damping: float = 0.2
 ## Steering authority retained at the START of a push stroke, easing back to full as it finishes.
 ##
 ## On a real board you cannot carve while pushing, and the reason is anatomical rather than
@@ -417,6 +429,114 @@ func _board_axis() -> Vector3:
 		return Vector3.FORWARD
 	return axis.normalized()
 
+# =================================================================================================
+# RIG FRAMES - every orientation conversion in the project, and nowhere else.
+#
+# THE recurring bug class here (BUG_ARCHIVE #4, #6) is a quantity measured in one frame being used
+# in another. The rig has three, each adding one piece of orientation to the one above it:
+#
+#   frame        adds                                   consumed by
+#   ----------   ------------------------------------   ----------------------------------------
+#   SkaterRoot   world heading + landing residuals       _board_axis, steering, camera, position
+#   BoardPivot   the rider's 0/180 switch-stance flip    trick pitch, manuals, feet, stance facts
+#   BoardMesh    the deck's own flip roll + shuv yaw     roll targets, nose/tail identity
+#
+# TrickSignature.gd does exactly this for the two rotation-NAMING frames, and its conversions are
+# the only sign logic in this project that has never regressed. This is the same medicine applied
+# to the rig itself. Before it existed the seven call sites below each re-derived their own sign,
+# independently, and one of them had it backwards for every switch-stance kickturn ever taken.
+#
+# THE DISTINCTION THAT MATTERS, and the one that caused that bug - these are NOT interchangeable:
+#
+#   leading_axle_z()   WHERE THE RIDER IS GOING. Which end of the deck travel points toward.
+#                      Flips when you roll backwards down a bank, with the board never moving.
+#   pivot_reversed()   HOW TWO FRAMES RELATE. Whether BoardPivot is half a turn out of phase with
+#                      the rig. Flips when you land a 180, with your travel never changing.
+#
+# Deriving an axle from the first and then applying it in the rig's frame - without the second -
+# is precisely what made every kickturn in switch pivot on the airborne truck.
+# =================================================================================================
+
+## BoardPivot-local Z of the axle at the LEADING end - the end travel points toward.
+##
+## Read off the leading foot's REST offset rather than its live position, so it states which end the
+## rider is mounted facing and no animation can perturb it.
+func leading_axle_z() -> float:
+	var rest: Vector3 = foot_rig.left_rest if input_state.leading_foot == FootInputState.Foot.LEFT \
+		else foot_rig.right_rest
+	return manual_axle_z if rest.z >= 0.0 else -manual_axle_z
+
+## BoardPivot-local Z of the axle at the TRAILING end - the one a pop kicks off, a manual balances
+## on, and a kickturn pivots around.
+func trailing_axle_z() -> float:
+	return -leading_axle_z()
+
+## Maps a rider-relative pitch intent onto BoardPivot's local X axis.
+##
+## A positive local X pitch drops the +Z end (see _apply_manual_pivot). An OLLIE kicks the TRAILING
+## end down, so it wants signf(pitch) == signf(trailing_axle_z()) - which is exactly this value.
+## Multiply any "positive means tail down" angle by it before assigning to board_pivot.rotation.x.
+func stance_sign() -> float:
+	return -1.0 if leading_axle_z() >= 0.0 else 1.0
+
+## The deck's current pitch, read back RIDER-relative: positive is trailing-end-down (a tail
+## manual), negative is leading-end-down (a nose manual), whichever way round the rider stands.
+## The inverse of stance_sign()'s job, and the reason landing checks do not need their own copy.
+func rider_pitch_deg() -> float:
+	return board_pivot.rotation_degrees.x * stance_sign()
+
+## True while BoardPivot sits half a turn out of phase with the rig: all of switch and fakie, plus
+## anything after a landed body 180 (_evaluate_touchdown_landing parks the nearest multiple of 180
+## on the pivot and hands only the remainder to the rig).
+##
+## A statement about FRAMES, not about where the rider is going - see the block comment above.
+func pivot_reversed() -> bool:
+	return cos(board_pivot.rotation.y) < 0.0
+
+## Carries a BoardPivot-local Z into the rig's frame.
+##
+## Anything that derives a position from BoardPivot-relative facts and then applies it through
+## SkaterRoot - rotate_y(), to_global(), global_position - MUST pass through here.
+func pivot_z_to_rig(z: float) -> float:
+	return -z if pivot_reversed() else z
+
+## True while the DECK ITSELF is turned 180 deg from rest, i.e. after a landed shove-it.
+##
+## Deliberately distinct from pivot_reversed(): this is the board's own yaw, on BoardMesh, and it
+## turns without the rider turning. Nose and tail are attributes of the board, so this - never
+## pivot_reversed() - is what decides which physical end a foot is standing over.
+func deck_reversed() -> bool:
+	return cos(deg_to_rad(board_mesh.rotation_degrees.y)) < 0.0
+
+## Direction a kickflip rolls, compensated for a deck already sitting 180 deg round after a
+## shove-it. Note this takes NO stance term: nollie/fakie flip mirroring is applied once, in
+## FootInputState._build_trick_signature(), and applying it twice cancels it out.
+func flip_roll_sign() -> float:
+	return -1.0 if deck_reversed() else 1.0
+
+## How much of the rider's weight is available to lean the deck with, from 0 (none) to 1 (all).
+##
+## Carving works by leaning the deck onto its bushings, which needs weight over both trucks. Every
+## body state that takes weight off one of them reduces it, so rather than each such state bolting
+## another multiplier onto the steering rate, they are listed here as contributors.
+##
+## The most restrictive contributor governs rather than the product, because these are ALTERNATIVE
+## body positions, not stacking ones - a rider mid-push is not also loading the tail, and
+## multiplying two near-zero factors would only produce an authority no state actually calls for.
+##
+## Grinds and manuals hang off here when they arrive.
+func _lean_authority() -> float:
+	var authority: float = 1.0
+	# Loading a pop shifts the weight back onto the tail, ready to snap it down.
+	if input_state.is_preparing_pop():
+		authority = minf(authority, pop_load_turn_damping)
+	# Pushing puts a foot on the ground, leaving nothing over the back truck to lean with. Recovers
+	# as the stroke completes rather than snapping back, which is both what happens physically and
+	# smoother than a step change.
+	if _since_push < push_stroke_time:
+		authority = minf(authority, lerpf(push_turn_damping, 1.0, _since_push / push_stroke_time))
+	return authority
+
 ## Ground dynamics: slope gravity, wheel grip and rolling friction.
 ##
 ## These three used to be, respectively: absent entirely, a snap-to-perfect plus a fixed angle bail,
@@ -600,9 +720,8 @@ func _update_travel_axis_sign() -> void:
 ## attributes of the board, so a landed shove-it puts the tail at the leading end without moving the
 ## rider at all - read the deck's real orientation rather than inferring it from the rider's stance.
 func _update_stance_facts() -> void:
-	var deck_reversed: bool = cos(deg_to_rad(board_mesh.rotation_degrees.y)) < 0.0
 	input_state.update_stance_facts(board_pivot, foot_rig.left_rest, foot_rig.right_rest,
-		Vector3(velocity.x, 0.0, velocity.z), self, _travel_axis_sign, deck_reversed)
+		Vector3(velocity.x, 0.0, velocity.z), self, _travel_axis_sign, deck_reversed())
 
 ## Step 2. Push impulses from the face buttons (latched inputs ensure zero missed taps).
 func _apply_push_inputs() -> void:
@@ -629,18 +748,11 @@ func _apply_push_inputs() -> void:
 
 ## Step 4. Steering and stationary rotation via trigger lean (RT - LT), on pavement only.
 func _apply_steering(delta: float) -> void:
-	# Dampen steering by 80% while preparing pop to safely pre-wind aerial spin without swerving off line!
-	var turn_mult: float = 0.2 if input_state.is_preparing_pop() else 1.0
-	# You cannot carve while pushing: carving leans the deck on its bushings, and with one foot on
-	# the ground there is no weight over the back truck to lean with. Eases back to full authority as
-	# the stroke completes rather than snapping, so the board does not suddenly grab.
-	#
-	# Note this damps STEERING only, not the impulse. Whether the push itself should be rate-limited
-	# is a separate gameplay question - see push_stroke_time.
-	if _since_push < push_stroke_time:
-		var recovered: float = _since_push / push_stroke_time
-		turn_mult = minf(turn_mult, lerpf(push_turn_damping, 1.0, recovered))
-	var turn_rate: float = input_state.lean * (input_state.board_config.turn_speed if is_instance_valid(input_state.board_config) else 3.0) * turn_mult
+	# Steering rate is lean input times the board's turn speed times however much of the rider's
+	# weight is actually available to lean with - see _lean_authority(), which is where pop loading,
+	# pushing, and later grinds and manuals all register their cost. Damps STEERING only, never the
+	# push impulse: gating a gameplay term on a body state is fine, gating it on an ANIMATION is not.
+	var turn_rate: float = input_state.lean * (input_state.board_config.turn_speed if is_instance_valid(input_state.board_config) else 3.0) * _lean_authority()
 	if not is_grounded or abs(input_state.lean) <= 0.05:
 		_is_carve_latched = false
 		return
@@ -653,21 +765,15 @@ func _apply_steering(delta: float) -> void:
 		_is_carve_latched = false
 		
 	if not _is_carve_latched:
-		# Stationary Kickturn: anchor rotation onto trailing rear wheel axle so back tires stay locked to pavement!
-		var left_is_front: bool = input_state.leading_foot == FootInputState.Foot.LEFT
-		# FRAME MISMATCH, and it was a real bug. `leading_foot` is resolved against BoardPivot's basis,
-		# which carries the 0/180 switch-stance flip; the rotation below happens in the RIG's frame,
-		# which does not. Without carrying that flip across, the Z sign inverts whenever the pivot sits
-		# at 180 - which is ALL of switch and fakie, plus anything after a landed body 180, since
-		# _evaluate_touchdown_landing() keeps the yaw's nearest multiple of 180 on the pivot.
+		# Stationary Kickturn: anchor the rotation on the axle that is ON THE GROUND, so the back
+		# tyres stay locked to the pavement while the nose swings round.
 		#
-		# The symptom was precise: _apply_grounded_board_pitch() lifts the LEADING trucks for a
-		# kickturn, so anchoring the leading axle made the airborne truck the pivot and swung the
-		# grounded one around it in a 0.94 m arc. Note _apply_manual_pivot() already gets this right
-		# (it multiplies through Basis(Vector3.UP, board_pivot.rotation.y)), so the two disagreed.
-		var deck_flip: float = 1.0 if cos(board_pivot.rotation.y) >= 0.0 else -1.0
-		var rear_axle_z: float = (manual_axle_z if left_is_front else -manual_axle_z) * deck_flip
-		var axle_local_pos := Vector3(0.0, -(ride_height - wheel_radius), rear_axle_z)
+		# The trailing axle is a BoardPivot-relative fact and the rotation below happens in the RIG's
+		# frame, so it has to be carried across - which is the whole reason pivot_z_to_rig() exists.
+		# Deriving the axle without it anchored the LEADING truck in switch, and since a kickturn
+		# lifts the leading trucks, that made the airborne one the pivot (BUG_ARCHIVE #6).
+		var axle_local_pos := Vector3(0.0, -(ride_height - wheel_radius),
+			pivot_z_to_rig(trailing_axle_z()))
 		var axle_world_before: Vector3 = to_global(axle_local_pos)
 		rotate_y(-turn_rate * delta)
 		var axle_world_after: Vector3 = to_global(axle_local_pos)
@@ -691,16 +797,18 @@ func _execute_pop() -> void:
 		input_state.pop_lateral_impulse_ratio = 0.0
 
 	airborne_body_yaw_deg = 0.0
-	# Same idiom as deck_reversed below: read the orientation instead of inferring it.
-	pop_riding_reversed = cos(deg_to_rad(board_pivot.rotation_degrees.y)) < 0.0
+	# Read the orientation rather than inferring it from the pop type - the rider may have arrived
+	# at this heading any number of ways.
+	pop_riding_reversed = pivot_reversed()
 	var sig: TrickSignature = input_state.current_trick
 
-	# Initial kicktail pitch angle and flip roll sign upon popping (inverted in Switch/Fakie where Y == 180!)
-	var stance_sign: float = 1.0 if input_state.leading_foot == FootInputState.Foot.LEFT else -1.0
+	# Kick the deck's end down: the trailing one for an Ollie, the leading one for a Nollie. Written
+	# rider-relative and mapped onto the pivot's local X by stance_sign(), so switch and goofy need
+	# no separate case.
 	if sig.pop == TrickSignature.Pop.NOLLIE or sig.pop == TrickSignature.Pop.FAKIE_OLLIE:
-		board_pivot.rotation_degrees.x = -22.0 * stance_sign # Leading nose pop
+		board_pivot.rotation_degrees.x = -pop_pitch_deg * stance_sign()
 	else:
-		board_pivot.rotation_degrees.x = 22.0 * stance_sign # Trailing tail pop
+		board_pivot.rotation_degrees.x = pop_pitch_deg * stance_sign()
 
 	# Where the deck actually was when the trick started, so touchdown can measure what it turned
 	# through rather than assuming it turned through whatever was requested here.
@@ -717,13 +825,11 @@ func _execute_pop() -> void:
 	# rounding is a no-op and the target is unchanged.
 	var roll_rest: float = _nearest_multiple(board_mesh.rotation_degrees.z, 360.0)
 	var yaw_rest: float = _nearest_multiple(board_mesh.rotation_degrees.y, 180.0)
-	var deck_reversed: bool = cos(deg_to_rad(board_mesh.rotation_degrees.y)) < 0.0
-	var roll_sign: float = -1.0 if deck_reversed else 1.0
 	if sig.flip == TrickSignature.Flip.KICK:
-		target_board_roll = roll_rest + (360.0 * roll_sign)
+		target_board_roll = roll_rest + (360.0 * flip_roll_sign())
 		is_flip_in_progress = true
 	elif sig.flip == TrickSignature.Flip.HEEL:
-		target_board_roll = roll_rest - (360.0 * roll_sign)
+		target_board_roll = roll_rest - (360.0 * flip_roll_sign())
 		is_flip_in_progress = true
 	else:
 		target_board_roll = roll_rest
@@ -895,8 +1001,9 @@ func _credit_achieved_rotation() -> void:
 			sig.shuv_deg = achieved * 180 * signi(sig.shuv_deg)
 
 func _apply_airborne_board_pitch(delta: float) -> void:
+	# Solved RIDER-relative throughout - positive is trailing-end-down - then mapped onto the pivot's
+	# local X by stance_sign() in the single assignment at the end.
 	var target_pitch_deg: float = 0.0
-	var left_is_front: bool = input_state.leading_foot == FootInputState.Foot.LEFT
 	var front: Vector2 = input_state.front_stick()
 	var back: Vector2 = input_state.back_stick()
 	var sig: TrickSignature = input_state.current_trick
@@ -904,15 +1011,13 @@ func _apply_airborne_board_pitch(delta: float) -> void:
 	if sig and sig.flip != TrickSignature.Flip.NONE and is_flip_in_progress:
 		target_pitch_deg = sig.flick_tilt_deg
 
-	if back.y > 0.15:
-		target_pitch_deg = back.y * 24.0 # Tail dip (trailing edge)
-	elif front.y < -0.15:
-		target_pitch_deg = front.y * 24.0 # Nose dip (leading edge)
-		
-	if not left_is_front:
-		target_pitch_deg = -target_pitch_deg # Invert local X rotation when board is at Y=180
-	
-	board_pivot.rotation_degrees.x = lerpf(board_pivot.rotation_degrees.x, target_pitch_deg, 14.0 * delta)
+	if back.y > pitch_stick_deadzone:
+		target_pitch_deg = back.y * max_pitch_deg # Tail dip (trailing edge)
+	elif front.y < -pitch_stick_deadzone:
+		target_pitch_deg = front.y * max_pitch_deg # Nose dip (leading edge)
+
+	board_pivot.rotation_degrees.x = lerpf(board_pivot.rotation_degrees.x,
+		target_pitch_deg * stance_sign(), airborne_pitch_follow * delta)
 
 ## Folds the body rotation that just happened into the trick signature and resolves its name.
 ## Called only on successful landings - a bail leaves the previous landed trick on display.
@@ -1004,12 +1109,11 @@ func _evaluate_touchdown_landing() -> void:
 	var pitch: float = board_pivot.rotation_degrees.x
 	var in_manual_zone: bool = false
 	
-	var left_is_front: bool = input_state.leading_foot == FootInputState.Foot.LEFT
 	var front: Vector2 = input_state.front_stick()
 	var back: Vector2 = input_state.back_stick()
 
 	# Check if back or front stick is deflected (>= 0.20) upon touchdown, supporting heavy landings and scoops!
-	var effective_pitch: float = pitch if left_is_front else -pitch
+	var effective_pitch: float = rider_pitch_deg()
 	if effective_pitch > 5.0 and (back.y >= 0.20 or (input_state.current_pop_state == FootInputState.PopState.LOADING_OLLIE and back.length() >= 0.20)):
 		in_manual_zone = true # Touchdown into standard / switch manual!
 	elif effective_pitch < -5.0 and (front.y <= -0.20 or (input_state.current_pop_state == FootInputState.PopState.LOADING_NOLLIE and front.length() >= 0.20)):
@@ -1033,8 +1137,9 @@ func _evaluate_touchdown_landing() -> void:
 		manual_timer = 0.0
 
 func _apply_grounded_board_pitch(delta: float) -> void:
+	# Solved RIDER-relative throughout - positive is trailing-end-down - then mapped onto the pivot's
+	# local X by stance_sign() in the single assignment at the end.
 	var target_pitch_deg: float = 0.0
-	var left_is_front: bool = input_state.leading_foot == FootInputState.Foot.LEFT
 	var front: Vector2 = input_state.front_stick()
 	var back: Vector2 = input_state.back_stick()
 	var is_manualing: bool = false
@@ -1045,10 +1150,10 @@ func _apply_grounded_board_pitch(delta: float) -> void:
 	# Once an active manual is established, ANY trailing/leading stick load (>= 0.20) latches balance so scoops and heavy pops out of manuals don't drop!
 	var no_scoop: bool = input_state.max_swept_angle < 10.0
 	if (not was_manualing and back.y > 0.20 and back.length() <= 0.90 and no_scoop) or (was_manualing and (back.y >= 0.20 or (input_state.current_pop_state == FootInputState.PopState.LOADING_OLLIE and back.length() >= 0.20))):
-		target_pitch_deg = minf(1.0, back.length()) * 24.0
+		target_pitch_deg = minf(1.0, back.length()) * max_pitch_deg
 		is_manualing = true
 	elif (not was_manualing and front.y < -0.20 and front.length() <= 0.90 and no_scoop) or (was_manualing and (front.y <= -0.20 or (input_state.current_pop_state == FootInputState.PopState.LOADING_NOLLIE and front.length() >= 0.20))):
-		target_pitch_deg = -minf(1.0, front.length()) * 24.0
+		target_pitch_deg = -minf(1.0, front.length()) * max_pitch_deg
 		is_manualing = true
 		
 	# Automatically lift front trucks during Stationary Kickturns ONLY if not already balancing a thumbstick manual!
@@ -1056,9 +1161,6 @@ func _apply_grounded_board_pitch(delta: float) -> void:
 		target_pitch_deg = kickturn_pitch_deg
 		manual_timer = manual_entry_delay
 		
-	if not left_is_front:
-		target_pitch_deg = -target_pitch_deg # Invert local X rotation when board is at Y=180
-	
 	# Tightened Grounded Manual Delay (80ms): ignores brief transition frames when fast-snapping to full extension
 	if abs(target_pitch_deg) > 0.5:
 		if manual_timer < manual_entry_delay:
@@ -1066,5 +1168,6 @@ func _apply_grounded_board_pitch(delta: float) -> void:
 			target_pitch_deg = 0.0
 	else:
 		manual_timer = 0.0
-	
-	board_pivot.rotation_degrees.x = lerpf(board_pivot.rotation_degrees.x, target_pitch_deg, 16.0 * delta)
+
+	board_pivot.rotation_degrees.x = lerpf(board_pivot.rotation_degrees.x,
+		target_pitch_deg * stance_sign(), grounded_pitch_follow * delta)

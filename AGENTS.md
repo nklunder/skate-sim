@@ -50,9 +50,10 @@
 - **Layer 1 (Body Spin Authority):** Trigger lean rotates `board_pivot.y` directly (with fluid angular momentum lerping `lerp 20.0 * delta`) so the rolling travel vector and chase camera stay anchored cleanly behind the rider. Pre-wind steering on the ground is damped by 80% during pop loading.
 - **Grounded Steering & Stationary Kickturns:** Above low speeds ($\ge 0.5\text{ m/s}$), shoulder triggers carve through bushing turn rates around center origin. Below `@export var kickturn_max_speed: float = 0.5`, turning switches to a **Stationary Kickturn**:
   - **Axle Anchoring:** In low-speed turns, `global_position` dynamically translates by the pre/post-rotation delta of the trailing rear contact axle (`manual_axle_z`), locking back wheel tires to their exact pavement coordinate while the nose swings in an arc.
-  - **Rule — the kickturn anchor must be converted out of `BoardPivot`'s frame into the RIG's.** `leading_foot` is resolved against `BoardPivot`'s basis, which carries the 0/180 switch flip; the kickturn's `rotate_y` + `to_global()` happen on `SkaterRoot`, which does not. Multiply the axle's Z by `cos(board_pivot.rotation.y) >= 0.0 ? 1 : -1`. Omitting it inverted the anchor for **all** of switch/fakie (see BUG_ARCHIVE #6). `_apply_manual_pivot()` gets this right via `Basis(Vector3.UP, board_pivot.rotation.y)`; the two must agree.
+  - **Rule — the kickturn anchor is `pivot_z_to_rig(trailing_axle_z())`.** The axle is a `BoardPivot` fact and the rotation happens in the rig's frame, so it must be converted (critical rule 1). Omitting the conversion inverted the anchor for **all** of switch/fakie and pivoted the board on its airborne truck — see BUG_ARCHIVE #6.
   - **Carve Latching (`_is_carve_latched`):** Turns initiated above $0.5\text{ m/s}$ remain in continuous carving mode as friction decelerates the board down to a near-stall ($< 0.05\text{ m/s}$), preventing sudden mid-carve kickturn interruptions.
-  - **Push Steering Damping (`push_turn_damping = 0.15`, `push_stroke_time = 0.25`):** You cannot carve while pushing — carving leans the deck on its bushings, and with one foot on the ground there is no weight over the back truck to lean with. Steering authority is cut to 15% at the start of a stroke and eases back to full as it completes. Damps **steering only**, never the impulse: gating a gameplay term on animation state is forbidden, so `_since_push` is a physics timer independent of `FootRig.push_anim_duration`.
+  - **Steering rate is `lean × turn_speed × _lean_authority()`.** `_lean_authority()` is the single home for "how much of the rider's weight is available to lean the deck with" — carving works by leaning onto the bushings, so every body state that takes weight off a truck registers there as a named contributor rather than bolting another multiplier onto the turn rate. Currently: pop loading (`pop_load_turn_damping = 0.2`, weight shifted onto the tail) and pushing (`push_turn_damping = 0.15`, a foot on the ground, easing back over `push_stroke_time`). **Grinds and manuals belong here too.** Most restrictive contributor governs, since these are alternative body positions rather than stacking ones.
+  - **Rule — damp STEERING, never the impulse.** Gating a gameplay term on a body state is fine; gating it on an *animation* is not. `_since_push` is a physics timer, deliberately independent of `FootRig.push_anim_duration`.
   - **Kickturn Pitch Lift & Manual Protection:** Automatically applies `@export var kickturn_pitch_deg: float = 10.0` nose lift during slow turns (bypassing `manual_entry_delay` for instant elevation) **only** when neither thumbstick is holding an active manual or nose manual. When balancing a manual (`is_manualing == true`), user pitch controls remain completely untouched while turns cleanly rotate around the active grounded axle!
 - **Layer 2 (Airborne & Grounded Pitch Control):** Thumbsticks tilt the nose/tail between `0.20 to 0.90` stick deflection for manuals ($24^\circ$ tilt) and airborne realignments. Flick tilt dynamically targets measured diagonal angles ("boned" downward up to $-18^\circ$, "rocketed" upward up to $+18^\circ$).
 - **Layer 3 (Deck Flip & Spin Authority):** `board_mesh.z` (roll) and `board_mesh.y` (yaw) rotate cleanly toward targets. Shoe hover catching raises shoe boxes to $Y=0.18\text{m}$ during flips, locking in as griptape revolves face up. Both shoe coordinates firmly snap back to deck rest pose immediately upon touchdown and maintain locked standing posture during grounded rolling whenever not executing a foot push stroke.
@@ -121,11 +122,24 @@
 
 ## ⚠️ Critical Technical Notes & Architectural Rules
 
-1. **Godot Euler Rotation Inversion ($\text{Y} = 180^\circ$ Compensation & Shove-it Decoupling):**
-   - Godot uses `YXZ` Euler order. Turning $180^\circ$ into Switch or Fakie flips local X and Z axes relative to world space.
-   - Always apply stance sign compensation (`stance_sign = -1.0 if not left_is_front else 1.0`) when setting local X pitch targets for pops and manuals.
-   - For flip roll targets, decouple rotation from $180^\circ$ deck yaw reversals after Shove-its (`deck_orientation_comp = -1.0 if cos(deg_to_rad(board_mesh.y)) < 0.0 else 1.0`). In Fakie/Nollie, mirror Kickflip/Heelflip trick labels directly in `FootInputState.gd`.
-   - For Shove-it and Varial yaw spins around Y, **NEVER** couple rotation to `deck_orientation_comp` or deck reversal; spin sign is raw thumbstick sweep direction (`input_state.last_scoop_sign`).
+1. **🧭 RIG FRAMES — never hand-roll an orientation sign. Use the conversion layer.**
+   - The rig has three frames, each adding one piece of orientation to the one above it. **Every** conversion between them lives in the `RIG FRAMES` block in `SkaterController.gd` and nowhere else:
+
+     | frame | adds | consumed by |
+     |---|---|---|
+     | `SkaterRoot` | world heading + landing residuals | `_board_axis`, steering, camera, position |
+     | `BoardPivot` | the rider's $0/180^\circ$ switch-stance flip | trick pitch, manuals, feet, stance facts |
+     | `BoardMesh` | the deck's own flip roll + shuv yaw | roll targets, nose/tail identity |
+
+   - **The API:** `leading_axle_z()` / `trailing_axle_z()` (BoardPivot-local Z of each end), `stance_sign()` (rider-relative pitch → local X), `rider_pitch_deg()` (the inverse read-back), `pivot_reversed()`, `pivot_z_to_rig()`, `deck_reversed()`, `flip_roll_sign()`.
+   - **Rule — solve RIDER-relative, convert once at the assignment.** Write pitch logic as "positive means trailing-end-down" and multiply by `stance_sign()` in the single line that writes `board_pivot.rotation_degrees.x`. Never branch on `left_is_front` inline.
+   - **Rule — the two facts below are NOT interchangeable.** Confusing them is exactly what caused BUG_ARCHIVE #6:
+     - `leading_axle_z()` — **where the rider is going.** Flips when you roll backwards down a bank, with the board never moving.
+     - `pivot_reversed()` — **how two frames relate.** Flips when you land a $180^\circ$, with your travel never changing.
+   - **Rule — anything derived from BoardPivot facts but applied through `SkaterRoot`** (`rotate_y`, `to_global`, `global_position`) **must pass through `pivot_z_to_rig()`.**
+   - **Rule — Shove-it / Varial yaw spins take NO deck-reversal term.** Spin sign is the raw thumbstick sweep (`input_state.last_scoop_sign`). Only flip ROLL uses `flip_roll_sign()`.
+   - **Rule — mirror once.** Nollie/Fakie flip mirroring is applied in `FootInputState._build_trick_signature()` only; applying it again at the roll target cancels it out.
+   - *Background: Godot uses `YXZ` Euler order, so a $180^\circ$ turn into Switch or Fakie flips local X and Z relative to world space. This layer is the same medicine `TrickSignature.gd` applies to the rotation-**naming** frames — whose conversions are the only sign logic in this project that has never regressed.*
 2. **Modular Speed Parameters:**
    - Derive motion rates from exported top-level variables (`flip_speed_deg`, `spin_speed_deg`, `body_spin_speed_deg`, `max_push_speed`, `push_impulse`, `rolling_friction`, `peg_tilt_deg`). Never hardcode velocity literals in tick equations.
 3. **Never Read a Display String to Drive Behavior:**
