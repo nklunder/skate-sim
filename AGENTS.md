@@ -28,6 +28,10 @@
 - **Scoop & Shove-it Symmetry:** The skateboard kicks directly in the true rotational direction of your thumbstick sweep, completely independent of starting position on the joystick or physical deck alignment.
   - **Standard Scoop Buffer ($40^\circ \to 94^\circ$ arc span):** Triggers a **$180^\circ$ Pop Shove-it** (or Varial Flip).
   - **Deep Scoop Buffer ($\ge 95^\circ$ arc span):** Triggers a **$360^\circ$ Pop Shove-it** (or 360 Flip / Tre Flip, Laser Flip), reducing required thumbstick rotational effort while avoiding accidental misfires.
+- **Session-Style Pop Impulse Control (Directional Jumping):** Holding the pop thumbstick slightly off-center left or right when popping an Ollie or Nollie imparts a lateral directional leap:
+  - **Deadzone & Scaling:** Horizontal stick deflection (`stick.x`) has an inner deadzone ($|x| < 0.15$) for straight gap consistency, smoothly scaling out to 100% lateral velocity (`1.5 m/s`) at $|x| = 0.70$.
+  - **Travel-Relative Mapping:** Joystick Left (`stick.x < 0`) always pops to the left of your travel line, and Joystick Right (`stick.x > 0`) pops to the right, consistent across Ollie, Nollie, Switch, and Fakie.
+  - **Scoop Protection:** When an arc sweep ($\ge 40^\circ$) is detected for Pop Shove-its or 360 Flips, directional lateral impulse is automatically disabled to prevent unwanted sideways launches during scooping tricks.
 - **Analog Trigger Body Rotation:** L and R trigger pulls spin the skater in mid-air. An **audio-log power taper curve ($y = \text{sign}(x) \cdot |x|^{2.2}$)** desensitizes light-to-mid squeezes for subtle styling adjustments while scaling exponentially to 100% spin velocity (`554 deg/s`) for explosive flat-ground 360s!
 
 ---

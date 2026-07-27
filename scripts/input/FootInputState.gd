@@ -55,6 +55,7 @@ var last_push_type: String = "None"
 var current_pop_state: PopState = PopState.NONE
 var trick_status_string: String = "Grounded"
 var pop_impulse_triggered: bool = false
+var pop_lateral_impulse_ratio: float = 0.0
 var last_pop_type: String = "None" # Display only. Logic reads current_trick.pop.
 var last_pop: TrickSignature.Pop = TrickSignature.Pop.OLLIE
 ## Measurement of the trick in progress. Populated at pop with pop/flip/shuv; SkaterController
@@ -157,6 +158,7 @@ func _poll_inputs() -> void:
 	var curr_space: bool = Input.is_physical_key_pressed(KEY_SPACE)
 	if curr_space and not _prev_space_pressed and current_pop_state != PopState.POPPED:
 		pop_impulse_triggered = true
+		pop_lateral_impulse_ratio = 0.0
 		current_pop_state = PopState.POPPED
 		_set_pop(TrickSignature.Pop.OLLIE)
 		_build_trick_signature()
@@ -235,6 +237,7 @@ func _detect_pop_load_and_flick() -> void:
 	# Execute Flick Pop from loaded states
 	if current_pop_state == PopState.LOADING_OLLIE and front.length() >= 0.35 and front.y <= 0.20:
 		pop_impulse_triggered = true
+		pop_lateral_impulse_ratio = _calculate_lateral_pop_ratio(back.x)
 		current_pop_state = PopState.POPPED
 		# Differentiate Switch vs Regular Ollie based on profile stance vs live orientation
 		if (stance == Stance.REGULAR and not left_is_front) or (stance == Stance.GOOFY and left_is_front):
@@ -244,6 +247,7 @@ func _detect_pop_load_and_flick() -> void:
 		_build_trick_signature()
 	elif current_pop_state == PopState.LOADING_NOLLIE and back.length() >= 0.35 and back.y >= -0.20:
 		pop_impulse_triggered = true
+		pop_lateral_impulse_ratio = _calculate_lateral_pop_ratio(front.x)
 		current_pop_state = PopState.POPPED
 		if (stance == Stance.REGULAR and not left_is_front) or (stance == Stance.GOOFY and left_is_front):
 			_set_pop(TrickSignature.Pop.FAKIE_OLLIE)
@@ -256,6 +260,17 @@ func _detect_pop_load_and_flick() -> void:
 		current_pop_state = PopState.NONE
 		max_swept_angle = 0.0
 		trick_status_string = "Grounded & Rolling"
+
+func _calculate_lateral_pop_ratio(stick_x: float) -> float:
+	# Disable directional pop if scooping a Pop Shove-it or Tre Flip (arc sweep >= 40 deg)
+	if max_swept_angle >= 40.0:
+		return 0.0
+	var abs_x: float = absf(stick_x)
+	if abs_x < 0.15:
+		return 0.0
+	# Smoothly scale deflection from 0.15 -> 0.70 into magnitude 0.0 -> 1.0
+	var ratio: float = clampf((abs_x - 0.15) / (0.70 - 0.15), 0.0, 1.0)
+	return -ratio if stick_x < 0.0 else ratio
 
 func _set_pop(p: TrickSignature.Pop) -> void:
 	last_pop = p

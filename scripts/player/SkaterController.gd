@@ -155,6 +155,10 @@ var _camera_pos: Vector3 = Vector3.ZERO
 
 @export_category("Aerial & Jump Physics")
 @export var jump_impulse: float = 5.2
+## Maximum sideways jump velocity (in m/s) imparted when aiming the pop thumbstick off-center.
+@export var max_lateral_pop_impulse: float = 1.5
+## Slight natural board yaw offset (in degrees) imparted during directed lateral jumps.
+@export var lateral_pop_yaw_deg: float = 5.0
 ## Also sets which gradients hold the skater, via rolling_friction - see that field.
 @export var gravity_accel: float = 16.0
 # vertical_velocity now lives with `velocity` under Motion & Push Physics: it is velocity.y, not a
@@ -686,6 +690,13 @@ func _physics_process(delta: float) -> void:
 		vertical_velocity = jump_impulse
 		is_grounded = false
 		input_state.pop_impulse_triggered = false
+		
+		if absf(input_state.pop_lateral_impulse_ratio) > 0.0:
+			var lateral_axis: Vector3 = global_transform.basis.x * _travel_axis_sign
+			lateral_axis.y = 0.0
+			velocity += lateral_axis.normalized() * (input_state.pop_lateral_impulse_ratio * max_lateral_pop_impulse)
+			board_pivot.rotation_degrees.y -= input_state.pop_lateral_impulse_ratio * lateral_pop_yaw_deg
+			input_state.pop_lateral_impulse_ratio = 0.0
 		
 		airborne_body_yaw_deg = 0.0
 		# Same idiom as deck_reversed below: read the orientation instead of inferring it.
