@@ -19,7 +19,7 @@ func _ready() -> void:
 	_setup_shoe_model()
 
 func _setup_shoe_model() -> void:
-	if not is_instance_valid(shoe_scene):
+	if shoe_scene == null:
 		return
 		
 	var instance: Node3D = shoe_scene.instantiate() as Node3D

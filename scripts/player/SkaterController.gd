@@ -224,9 +224,6 @@ var _since_push: float = 1000.0
 ## full lean the board yaws ~172 deg/s, so a permanent cap here would make every hard turn drift.
 ## Same transient-versus-steady-state split the camera needed two rates for.
 @export var landing_turn_rate_deg: float = 60.0
-## Seconds since the last touchdown. Not currently read, but kept as the natural home for anything
-## else that needs to know how fresh a landing is.
-var _since_touchdown: float = 1000.0
 ## True while the wheels are still pulling travel back onto the board axis after a landing. A state
 ## flag rather than a fixed window deliberately: how long realignment takes depends on the residual
 ## AND the speed, so any fixed duration would expire mid-swing on slow, badly-rotated landings and
@@ -402,11 +399,19 @@ func _apply_manual_pivot() -> void:
 ## skater is already travelling along it. Stationary, it defaults to the board's forward.
 func _apply_push_impulse() -> void:
 	var axis: Vector3 = _board_axis()
-	var along: float = Vector3(velocity.x, 0.0, velocity.z).dot(axis)
 	var dir: Vector3 = axis if _travel_axis_sign >= 0.0 else -axis
+	# The ceiling is on SPEED, so it is measured against total ground speed rather than against the
+	# along-axis component. Clamping the component instead let a push top that component up to the
+	# full 7 m/s while a sideways drift sat on top of it, so pushing out of a crooked landing reached
+	# 8.3 m/s - over a ceiling the rest of the game treats as absolute.
+	#
+	# The impulse is still applied purely along the rolling axis: that is what lets grip scrub the
+	# lateral component away and straighten a crooked roll, rather than entrenching it.
+	#
 	# maxf guards the downhill case: gravity can legitimately carry the skater past max_push_speed,
 	# and a push must never become a brake.
-	var add: float = maxf(0.0, minf(absf(along) + push_impulse, max_push_speed) - absf(along))
+	var speed: float = current_speed
+	var add: float = maxf(0.0, minf(speed + push_impulse, max_push_speed) - speed)
 	velocity.x += dir.x * add
 	velocity.z += dir.z * add
 
@@ -561,7 +566,6 @@ func _apply_ground_forces(delta: float) -> void:
 	# scrub IS the speed penalty - landing 5 deg off costs cos(5 deg), i.e. almost nothing, while
 	# landing 60 deg off costs most of your speed. Carving pays the same toll, which is why steering
 	# now has weight to it.
-	_since_touchdown += delta
 	var axis: Vector3 = _board_axis()
 	var lateral: Vector3 = flat - axis * flat.dot(axis)
 	# While realigning from a landing, cap the lateral force at whatever turns travel no faster than
@@ -890,7 +894,6 @@ func _integrate_flight(delta: float) -> void:
 		global_position.y = _surface_ride_y()
 		vertical_velocity = 0.0
 		is_grounded = true
-		_since_touchdown = 0.0
 		_realigning = true
 		if landing_dip_ref_speed > 0.0:
 			_landing_dip = minf(impact / landing_dip_ref_speed, 1.0) * landing_dip_max

@@ -63,18 +63,13 @@ var trick_status_string: String = "Grounded"
 var pop_impulse_triggered: bool = false
 var pop_impulse_scale: float = 1.0
 var pop_lateral_impulse_ratio: float = 0.0
-var last_pop_type: String = "None" # Display only. Logic reads current_trick.pop.
 var last_pop: TrickSignature.Pop = TrickSignature.Pop.OLLIE
 ## Measurement of the trick in progress. Populated at pop with pop/flip/shuv; SkaterController
 ## fills in body_deg at touchdown, once the body rotation has actually happened.
 var current_trick: TrickSignature = TrickSignature.new()
-## The flip the current pop is classified as. An enum for the same reason `Foot` is: this value is
-## LOGIC, not display - it is mirrored for nollie/fakie below and copied straight onto the signature -
-## and as a String a typo compiled cleanly and silently produced no flip at all.
-var active_flip: TrickSignature.Flip = TrickSignature.Flip.NONE
 var last_scoop_sign: float = -1.0
 var max_swept_angle: float = 0.0
-var accumulated_scoop_deg: float = 0.0
+var _accumulated_scoop_deg: float = 0.0
 var _last_frame_scoop_angle: float = 0.0
 var last_combo_string: String = "None"
 ## Readout of the last landed trick's measured signature, shown on the HUD so table rows can be
@@ -132,6 +127,10 @@ func _poll_inputs(delta: float) -> void:
 	# Spacebar fallback for keyboard jumping with Z (Kickflip) / X (Heelflip) / C (Shove-it)
 	if s.pop_edge and current_pop_state != PopState.POPPED:
 		pop_impulse_triggered = true
+		# Explicitly a full-strength pop. Without this the keyboard path inherited whatever scale the
+		# last STICK pop left behind - and since touchdown resets current_pop_state but not the scale,
+		# a spacebar ollie after a 25% ledge drop popped at 25% and looked broken.
+		pop_impulse_scale = 1.0
 		pop_lateral_impulse_ratio = 0.0
 		current_pop_state = PopState.POPPED
 		_set_pop(TrickSignature.Pop.OLLIE)
@@ -151,14 +150,14 @@ func _detect_pop_load_and_flick() -> void:
 			current_pop_state = PopState.LOADING_OLLIE
 			trick_status_string = "Loading Ollie (Tail)" if back.length() >= 0.70 else "Manual / Ledge Prep"
 			_last_frame_scoop_angle = rad_to_deg(back.angle())
-			accumulated_scoop_deg = 0.0
+			_accumulated_scoop_deg = 0.0
 			max_swept_angle = 0.0
 		# Nollie / Switch Nollie Load (Leading front foot pushed up in upper hemisphere)
 		elif front.length() >= 0.20 and front.y <= -0.20:
 			current_pop_state = PopState.LOADING_NOLLIE
 			trick_status_string = "Loading Nollie (Nose)" if front.length() >= 0.70 else "Manual / Ledge Prep"
 			_last_frame_scoop_angle = rad_to_deg(front.angle())
-			accumulated_scoop_deg = 0.0
+			_accumulated_scoop_deg = 0.0
 			max_swept_angle = 0.0
 			
 	# Measure total angular sweep (arc span) and true rotational direction via frame delta accumulation to prevent circle-wrap bugs
@@ -168,12 +167,12 @@ func _detect_pop_load_and_flick() -> void:
 			var curr_deg: float = rad_to_deg(active_scoop.angle())
 			var frame_delta: float = rad_to_deg(angle_difference(deg_to_rad(_last_frame_scoop_angle), deg_to_rad(curr_deg)))
 			_last_frame_scoop_angle = curr_deg
-			accumulated_scoop_deg += frame_delta
-			var swept: float = absf(accumulated_scoop_deg)
+			_accumulated_scoop_deg += frame_delta
+			var swept: float = absf(_accumulated_scoop_deg)
 			if swept > max_swept_angle:
 				max_swept_angle = swept
 				if swept >= 15.0:
-					last_scoop_sign = -1.0 if accumulated_scoop_deg > 0.0 else 1.0
+					last_scoop_sign = -1.0 if _accumulated_scoop_deg > 0.0 else 1.0
 	
 	# Execute Flick Pop from loaded states
 	if current_pop_state == PopState.LOADING_OLLIE and front.length() >= 0.35 and front.y <= 0.20:
@@ -233,15 +232,15 @@ func _calculate_lateral_pop_ratio(stick_x: float) -> float:
 
 func _set_pop(p: TrickSignature.Pop) -> void:
 	last_pop = p
-	last_pop_type = ["Ollie", "Nollie", "Switch Ollie", "Fakie Ollie"][p]
 
 ## Measures what the player just did into `current_trick`. Body rotation is NOT known yet - it
 ## happens during flight - so SkaterController fills body_deg in at touchdown and resolves the name
 ## there. Nothing here builds a display string; naming lives entirely in TrickNames.gd.
 func _build_trick_signature() -> void:
-	active_flip = TrickSignature.Flip.NONE
-
 	var sig := TrickSignature.new()
+	# Local, not a field: nothing outside this function has ever read it, and a shared mutable
+	# copy of a value that is about to be written onto the signature is just a second source of truth.
+	var active_flip: TrickSignature.Flip = TrickSignature.Flip.NONE
 	sig.pop = last_pop
 
 	var left_is_front: bool = leading_foot == Foot.LEFT

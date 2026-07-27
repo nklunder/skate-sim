@@ -71,7 +71,7 @@ func _build_deck_material() -> ShaderMaterial:
 	return mat
 
 func _setup_skateboard_model() -> void:
-	if not is_instance_valid(blend_model):
+	if blend_model == null:
 		return
 		
 	var model_instance: Node3D = blend_model.instantiate() as Node3D

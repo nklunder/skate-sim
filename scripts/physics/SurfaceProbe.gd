@@ -36,9 +36,6 @@ func _init(space: PhysicsDirectSpaceState3D, exclude: Array[RID] = [], mask: int
 	_exclude = exclude
 	_mask = mask
 
-func set_space(space: PhysicsDirectSpaceState3D) -> void:
-	_space = space
-
 ## Raw cast between two world-space points.
 func cast(from: Vector3, to: Vector3) -> Hit:
 	var hit := Hit.new()
