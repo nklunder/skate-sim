@@ -40,30 +40,30 @@ func _update_label_positions() -> void:
 		status_lbl.size = Vector2(size.x, 18)
 		status_lbl.position = Vector2(0, size.y - 18)
 
-func update_telemetry(state: FootInputState) -> void:
-	if not state:
+func update_telemetry(rider: RiderInput, trick: TrickState) -> void:
+	if rider == null or trick == null:
 		return
-	var left_is_front: bool = state.leading_foot == FootInputState.Foot.LEFT
-	is_nollie_or_fakie_pop = state.last_pop == TrickSignature.Pop.NOLLIE or state.last_pop == TrickSignature.Pop.FAKIE_OLLIE
+	var left_is_front: bool = rider.leading_foot == RiderInput.Foot.LEFT
+	is_nollie_or_fakie_pop = trick.last_pop == TrickSignature.Pop.NOLLIE or trick.last_pop == TrickSignature.Pop.FAKIE_OLLIE
 	
 	if is_flick_stick:
 		# In Nollie/Fakie Ollie, trailing foot flicks; otherwise leading foot flicks
 		if is_nollie_or_fakie_pop:
-			active_vector = state.back_stick()
+			active_vector = rider.back_stick()
 			flick_is_left_foot = not left_is_front
-			status_lbl.text = "Flick (%s)" % FootInputState.foot_name(state.trailing_foot)
+			status_lbl.text = "Flick (%s)" % RiderInput.foot_name(rider.trailing_foot)
 		else:
-			active_vector = state.front_stick()
+			active_vector = rider.front_stick()
 			flick_is_left_foot = left_is_front
-			status_lbl.text = "Flick (%s)" % FootInputState.foot_name(state.leading_foot)
+			status_lbl.text = "Flick (%s)" % RiderInput.foot_name(rider.leading_foot)
 	else:
 		# Pop stick is trailing foot during normal pop, or leading foot during Nollie pop
-		if state.current_pop_state == FootInputState.PopState.LOADING_NOLLIE or is_nollie_or_fakie_pop:
-			active_vector = state.front_stick()
-			status_lbl.text = "Pop (%s)" % FootInputState.foot_name(state.leading_foot)
+		if trick.current_pop_state == TrickState.PopState.LOADING_NOLLIE or is_nollie_or_fakie_pop:
+			active_vector = rider.front_stick()
+			status_lbl.text = "Pop (%s)" % RiderInput.foot_name(rider.leading_foot)
 		else:
-			active_vector = state.back_stick()
-			status_lbl.text = "Pop (%s)" % FootInputState.foot_name(state.trailing_foot)
+			active_vector = rider.back_stick()
+			status_lbl.text = "Pop (%s)" % RiderInput.foot_name(rider.trailing_foot)
 			
 	queue_redraw()
 

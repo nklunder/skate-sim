@@ -28,11 +28,12 @@ func _ready() -> void:
 			skater_controller = get_tree().get_first_node_in_group("player") as SkaterController
 
 func _process(_delta: float) -> void:
-	if not is_instance_valid(skater_controller) or not is_instance_valid(skater_controller.input_state):
+	if not is_instance_valid(skater_controller) or not is_instance_valid(skater_controller.rider):
 		return
-	var state: FootInputState = skater_controller.input_state
+	var rider: RiderInput = skater_controller.rider
+	var trick: TrickState = skater_controller.trick
 	
-	pop_lbl.text = "Last Trick: %s" % state.last_combo_string
+	pop_lbl.text = "Last Trick: %s" % trick.last_combo_string
 	# Height above the surface the skater is actually over, not raw world Y - the two only agreed
 	# back when the world was a single flat plane.
 	var air_gap: float = skater_controller.global_position.y - skater_controller.ride_height
@@ -51,7 +52,7 @@ func _process(_delta: float) -> void:
 		skater_controller.current_speed, skater_controller.max_push_speed,
 		skater_controller.lateral_speed,
 		skater_controller.last_landing_slide, skater_controller.max_landing_slide]
-	push_lbl.text = "Last Push: %s" % state.last_push_type
+	push_lbl.text = "Last Push: %s" % rider.last_push_type
 	
 	var deck_roll: float = fmod(skater_controller.board_mesh.rotation_degrees.z, 360.0) if is_instance_valid(skater_controller.board_mesh) else 0.0
 	# Catch error is how far off its resting orientation the deck was at the last touchdown, against
@@ -63,20 +64,20 @@ func _process(_delta: float) -> void:
 		"AIR" if not skater_controller.is_grounded else "GND",
 		skater_controller.last_catch_error_deg, skater_controller.catch_cone_deg]
 	
-	left_stick_lbl.text = "Left Stick   | Mag: %.2f | Ang: %3.0f°" % [state.left_mag, rad_to_deg(state.left_angle)]
-	right_stick_lbl.text = "Right Stick | Mag: %.2f | Ang: %3.0f°" % [state.right_mag, rad_to_deg(state.right_angle)]
-	lean_lbl.text = "Trigger Spin (RT-LT): %.2f" % state.lean
-	# Polled here rather than in FootInputState: it is a debug label, so it is built by the debug
+	left_stick_lbl.text = "Left Stick   | Mag: %.2f | Ang: %3.0f°" % [rider.left_mag, rad_to_deg(rider.left_angle)]
+	right_stick_lbl.text = "Right Stick | Mag: %.2f | Ang: %3.0f°" % [rider.right_mag, rad_to_deg(rider.right_angle)]
+	lean_lbl.text = "Trigger Spin (RT-LT): %.2f" % rider.lean
+	# Polled here rather than in RiderInput: it is a debug label, so it is built by the debug
 	# view, at _process rate, instead of costing 64 Input queries on every physics tick.
 	button_lbl.text = "Button Pressed: %s" % JoyButtonNames.pressed_summary()
-	stance_lbl.text = "Static Config Stance: %s" % ("REGULAR" if state.stance == state.Stance.REGULAR else "GOOFY")
+	stance_lbl.text = "Static Config Stance: %s" % ("REGULAR" if rider.stance == rider.Stance.REGULAR else "GOOFY")
 	# The HUD is the only place foot identity becomes text; logic elsewhere compares enum values.
-	var lead_color: String = "#3399e6" if state.leading_foot == FootInputState.Foot.LEFT else "#e64d4d"
-	var trail_color: String = "#3399e6" if state.trailing_foot == FootInputState.Foot.LEFT else "#e64d4d"
-	leading_lbl.text = "Live Leading Foot: [color=%s]%s[/color]" % [lead_color, FootInputState.foot_name(state.leading_foot)]
-	trailing_lbl.text = "Live Trailing Foot: [color=%s]%s[/color]" % [trail_color, FootInputState.foot_name(state.trailing_foot)]
+	var lead_color: String = "#3399e6" if rider.leading_foot == RiderInput.Foot.LEFT else "#e64d4d"
+	var trail_color: String = "#3399e6" if rider.trailing_foot == RiderInput.Foot.LEFT else "#e64d4d"
+	leading_lbl.text = "Live Leading Foot: [color=%s]%s[/color]" % [lead_color, RiderInput.foot_name(rider.leading_foot)]
+	trailing_lbl.text = "Live Trailing Foot: [color=%s]%s[/color]" % [trail_color, RiderInput.foot_name(rider.trailing_foot)]
 	mesh_lbl.text = "Mesh Under Foot: L->[%s] | R->[%s]" % [
-		FootInputState.deck_end_name(state.left_foot_over), FootInputState.deck_end_name(state.right_foot_over)]
+		RiderInput.deck_end_name(rider.left_foot_over), RiderInput.deck_end_name(rider.right_foot_over)]
 	# Surface probe readout: what the collision layer currently sees underneath the trucks.
 	var hit: SurfaceProbe.Hit = skater_controller.surface_hit
 	if hit != null and hit.valid:
@@ -87,12 +88,12 @@ func _process(_delta: float) -> void:
 		surface_lbl.text = "Surface: none (airborne)"
 
 	# Paste these values straight into TrickNames.TABLE to name the trick you just landed.
-	sig_lbl.text = "Signature: %s" % state.last_trick_signature
+	sig_lbl.text = "Signature: %s" % trick.last_trick_signature
 	
 	if is_instance_valid(pop_diagram):
-		pop_diagram.update_telemetry(state)
+		pop_diagram.update_telemetry(rider, trick)
 	if is_instance_valid(flick_diagram):
-		flick_diagram.update_telemetry(state)
+		flick_diagram.update_telemetry(rider, trick)
 
 ## Formats a float without the "-0.00" flicker. Raycast results carry ~1e-8 of float noise, and
 ## "%.2f" faithfully renders its sign, so a perfectly stable surface reads as jittering between

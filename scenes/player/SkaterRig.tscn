@@ -1,7 +1,8 @@
 [gd_scene load_steps=14 format=3]
 
 [ext_resource type="Script" path="res://scripts/player/SkaterController.gd" id="1_controller"]
-[ext_resource type="Script" path="res://scripts/input/FootInputState.gd" id="2_input"]
+[ext_resource type="Script" path="res://scripts/input/RiderInput.gd" id="2_input"]
+[ext_resource type="Script" path="res://scripts/tricks/TrickState.gd" id="8_trick"]
 [ext_resource type="Resource" path="res://resources/DefaultConfig.tres" id="3_config"]
 [ext_resource type="Script" path="res://scripts/player/SkateDeckMesh.gd" id="4_deck_mesh"]
 [ext_resource type="Script" path="res://scripts/player/ChaseCamera.gd" id="5_chase_camera"]
@@ -34,9 +35,12 @@ roughness = 0.3
 [node name="SkaterRoot" type="Node3D" groups=["player"]]
 script = ExtResource("1_controller")
 
-[node name="FootInputState" type="Node" parent="."]
+[node name="RiderInput" type="Node" parent="."]
 script = ExtResource("2_input")
 board_config = ExtResource("3_config")
+
+[node name="TrickState" type="Node" parent="RiderInput"]
+script = ExtResource("8_trick")
 
 [node name="SurfaceAlign" type="Node3D" parent="."]
 

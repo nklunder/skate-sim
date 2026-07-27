@@ -138,7 +138,7 @@ func follow(delta: float) -> void:
 	# Where the camera wants to sit: behind travel, orbited toward the rider's chosen side. A node
 	# at yaw t looks along (-sin t, -cos t), so "behind" is the opposite.
 	var behind := Vector2(sin(_travel_heading), cos(_travel_heading))
-	_camera_side_smooth = lerpf(_camera_side_smooth, float(skater.input_state.camera_side),
+	_camera_side_smooth = lerpf(_camera_side_smooth, float(skater.rider.camera_side),
 		minf(camera_side_switch_speed * delta, 1.0))
 	var side := Vector2(skater.global_transform.basis.x.x, skater.global_transform.basis.x.z)
 	var pos_dir := behind

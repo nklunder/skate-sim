@@ -147,7 +147,7 @@ func _start_case() -> void:
 	if c.has("drift_deg"):
 		_skater.velocity = _skater.velocity.rotated(Vector3.UP, deg_to_rad(c["drift_deg"]))
 	if c.has("camera_side"):
-		_skater.input_state.camera_side = c["camera_side"]
+		_skater.rider.camera_side = c["camera_side"]
 	_frame = 0
 	_popped = false
 	_landed = false
@@ -188,13 +188,13 @@ func _physics_process(_delta: float) -> void:
 func _run_slope_case(c: Dictionary) -> void:
 	_max_lateral = maxf(_max_lateral, _lateral_speed())
 	if c.has("push_every") and _frame % int(c["push_every"]) == 0:
-		_skater.input_state.push_right_triggered = true
+		_skater.rider.push_right_triggered = true
 		_pushes += 1
 	if c.has("push_at_stop") and _skater.current_speed < 0.01 and _pushes == 0:
-		_skater.input_state.push_right_triggered = true
+		_skater.rider.push_right_triggered = true
 		_pushes += 1
 	if c.has("lean"):
-		_skater.input_state.lean = c["lean"] # Zeroed by _poll_inputs each tick with no device attached.
+		_skater.rider.lean = c["lean"] # Zeroed by _poll_inputs each tick with no device attached.
 	var speed: float = _skater.current_speed
 	_peak_speed = maxf(_peak_speed, speed)
 	_min_speed = minf(_min_speed, speed)
@@ -206,12 +206,12 @@ func _run_slope_case(c: Dictionary) -> void:
 func _run_landing_case(c: Dictionary) -> void:
 	# Pop a plain ollie, hold the landing heading through the flight, then judge the touchdown.
 	if _frame == 5 and not _popped:
-		var st: FootInputState = _skater.input_state
+		var st: TrickState = _skater.trick
 		var sig := TrickSignature.new()
 		sig.pop = TrickSignature.Pop.OLLIE
 		sig.flip = TrickSignature.Flip.NONE
 		st.current_trick = sig
-		st.current_pop_state = FootInputState.PopState.POPPED
+		st.current_pop_state = TrickState.PopState.POPPED
 		st.pop_impulse_triggered = true
 		_popped = true
 		return
@@ -241,7 +241,7 @@ func _run_landing_case(c: Dictionary) -> void:
 		return
 	if not _landed:
 		_landed = true
-		_land_status = _skater.input_state.trick_status_string
+		_land_status = _skater.trick.trick_status_string
 		_land_speed = _skater.current_speed
 		_land_slide = _skater.last_landing_slide
 		_residual = absf(rad_to_deg(angle_difference(

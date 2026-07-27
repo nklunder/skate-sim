@@ -141,7 +141,10 @@ var airborne_body_yaw_deg: float = 0.0
 ## the pivot's real yaw rather than inferred, and captured at pop because the yaw changes in flight.
 var pop_riding_reversed: bool = false
 
-@onready var input_state: FootInputState = $FootInputState
+## What the rider is doing with the controller, and where their feet are on the deck.
+@onready var rider: RiderInput = $RiderInput
+## What that adds up to as an attempted trick. A child of RiderInput so it ticks straight after it.
+@onready var trick: TrickState = $RiderInput/TrickState
 ## Carries ONLY surface pitch/roll. Deliberately a separate node from BoardPivot: that one's X is
 ## trick pitch (written by the manual/pop systems and read back by landing checks), so sharing the
 ## channel would corrupt manuals, wheel-bite detection and pops. CameraPivot stays on SkaterRoot so
@@ -467,7 +470,7 @@ func _board_axis() -> Vector3:
 ## Read off the leading foot's REST offset rather than its live position, so it states which end the
 ## rider is mounted facing and no animation can perturb it.
 func leading_axle_z() -> float:
-	var rest: Vector3 = foot_rig.left_rest if input_state.leading_foot == FootInputState.Foot.LEFT \
+	var rest: Vector3 = foot_rig.left_rest if rider.leading_foot == RiderInput.Foot.LEFT \
 		else foot_rig.right_rest
 	return manual_axle_z if rest.z >= 0.0 else -manual_axle_z
 
@@ -515,7 +518,7 @@ func deck_reversed() -> bool:
 
 ## Direction a kickflip rolls, compensated for a deck already sitting 180 deg round after a
 ## shove-it. Note this takes NO stance term: nollie/fakie flip mirroring is applied once, in
-## FootInputState._build_trick_signature(), and applying it twice cancels it out.
+## TrickState._build_trick_signature(), and applying it twice cancels it out.
 func flip_roll_sign() -> float:
 	return -1.0 if deck_reversed() else 1.0
 
@@ -533,7 +536,7 @@ func flip_roll_sign() -> float:
 func _lean_authority() -> float:
 	var authority: float = 1.0
 	# Loading a pop shifts the weight back onto the tail, ready to snap it down.
-	if input_state.is_preparing_pop():
+	if trick.is_preparing_pop():
 		authority = minf(authority, pop_load_turn_damping)
 	# Pushing puts a foot on the ground, leaving nothing over the back truck to lean with. Recovers
 	# as the stroke completes rather than snapping back, which is both what happens physically and
@@ -667,7 +670,7 @@ func _physics_process(delta: float) -> void:
 	_recover_landing_dip(delta)
 	_foot_frame.is_grounded = is_grounded
 	_foot_frame.deck_is_spinning = is_flip_in_progress
-	foot_rig.solve(delta, _foot_frame, input_state, camera_pivot.rotation.y, board_pivot.rotation.y)
+	foot_rig.solve(delta, _foot_frame, rider, camera_pivot.rotation.y, board_pivot.rotation.y)
 	camera_pivot.follow(delta)
 
 	# 9. Re-seat the board onto its contact axle. Runs last, after every writer of board_pivot pitch
@@ -724,12 +727,12 @@ func _update_travel_axis_sign() -> void:
 ## attributes of the board, so a landed shove-it puts the tail at the leading end without moving the
 ## rider at all - read the deck's real orientation rather than inferring it from the rider's stance.
 func _update_stance_facts() -> void:
-	input_state.update_stance_facts(board_pivot, foot_rig.left_rest, foot_rig.right_rest,
+	rider.update_stance_facts(board_pivot, foot_rig.left_rest, foot_rig.right_rest,
 		Vector3(velocity.x, 0.0, velocity.z), self, _travel_axis_sign, deck_reversed())
 
 ## Step 2. Push impulses from the face buttons (latched inputs ensure zero missed taps).
 func _apply_push_inputs() -> void:
-	if not (input_state.push_left_triggered or input_state.push_right_triggered):
+	if not (rider.push_left_triggered or rider.push_right_triggered):
 		return
 	if is_grounded:
 		_apply_push_impulse()
@@ -739,16 +742,16 @@ func _apply_push_inputs() -> void:
 		# should also be rate-limited in the physics is a gameplay question, and answering it
 		# silently here by gating on an animation would be exactly the animation-decides-an-outcome
 		# coupling this project has removed everywhere else.
-		if input_state.push_left_triggered:
-			foot_rig.start_push(FootInputState.Foot.LEFT)
+		if rider.push_left_triggered:
+			foot_rig.start_push(RiderInput.Foot.LEFT)
 		else:
-			foot_rig.start_push(FootInputState.Foot.RIGHT)
-		input_state.push_left_triggered = false
-		input_state.push_right_triggered = false
+			foot_rig.start_push(RiderInput.Foot.RIGHT)
+		rider.push_left_triggered = false
+		rider.push_right_triggered = false
 	elif vertical_velocity > 0.5 or (surface_hit.valid and global_position.y - _surface_ride_y() > 0.35):
 		# Clear stale latched presses if high in the air to prevent unintended touchdown bursts
-		input_state.push_left_triggered = false
-		input_state.push_right_triggered = false
+		rider.push_left_triggered = false
+		rider.push_right_triggered = false
 
 ## Step 4. Steering and stationary rotation via trigger lean (RT - LT), on pavement only.
 func _apply_steering(delta: float) -> void:
@@ -756,8 +759,8 @@ func _apply_steering(delta: float) -> void:
 	# weight is actually available to lean with - see _lean_authority(), which is where pop loading,
 	# pushing, and later grinds and manuals all register their cost. Damps STEERING only, never the
 	# push impulse: gating a gameplay term on a body state is fine, gating it on an ANIMATION is not.
-	var turn_rate: float = input_state.lean * (input_state.board_config.turn_speed if is_instance_valid(input_state.board_config) else 3.0) * _lean_authority()
-	if not is_grounded or abs(input_state.lean) <= 0.05:
+	var turn_rate: float = rider.lean * (rider.board_config.turn_speed if is_instance_valid(rider.board_config) else 3.0) * _lean_authority()
+	if not is_grounded or abs(rider.lean) <= 0.05:
 		_is_carve_latched = false
 		return
 		
@@ -787,24 +790,24 @@ func _apply_steering(delta: float) -> void:
 
 ## Step 5. The pop: vertical impulse, kicktail pitch, and the deck rotation targets for the trick.
 func _execute_pop() -> void:
-	if not (is_grounded and input_state.pop_impulse_triggered):
+	if not (is_grounded and trick.pop_impulse_triggered):
 		return
-	vertical_velocity = jump_impulse * input_state.pop_impulse_scale
+	vertical_velocity = jump_impulse * trick.pop_impulse_scale
 	is_grounded = false
-	input_state.pop_impulse_triggered = false
+	trick.pop_impulse_triggered = false
 
-	if absf(input_state.pop_lateral_impulse_ratio) > 0.0:
+	if absf(trick.pop_lateral_impulse_ratio) > 0.0:
 		var lateral_axis: Vector3 = global_transform.basis.x * _travel_axis_sign
 		lateral_axis.y = 0.0
-		velocity += lateral_axis.normalized() * (input_state.pop_lateral_impulse_ratio * max_lateral_pop_impulse)
-		board_pivot.rotation_degrees.y -= input_state.pop_lateral_impulse_ratio * lateral_pop_yaw_deg
-		input_state.pop_lateral_impulse_ratio = 0.0
+		velocity += lateral_axis.normalized() * (trick.pop_lateral_impulse_ratio * max_lateral_pop_impulse)
+		board_pivot.rotation_degrees.y -= trick.pop_lateral_impulse_ratio * lateral_pop_yaw_deg
+		trick.pop_lateral_impulse_ratio = 0.0
 
 	airborne_body_yaw_deg = 0.0
 	# Read the orientation rather than inferring it from the pop type - the rider may have arrived
 	# at this heading any number of ways.
 	pop_riding_reversed = pivot_reversed()
-	var sig: TrickSignature = input_state.current_trick
+	var sig: TrickSignature = trick.current_trick
 
 	# Kick the deck's end down: the trailing one for an Ollie, the leading one for a Nollie. Written
 	# rider-relative and mapped onto the pivot's local X by stance_sign(), so switch and goofy need
@@ -821,7 +824,7 @@ func _execute_pop() -> void:
 
 	# Configure BoardMesh flip & spin targets (Layer 3). Only the deck's own 180 deg yaw reversal
 	# after a Shove-it needs compensating here - Nollie/Fakie flip mirroring is already applied
-	# in FootInputState._build_trick_signature(), so there is no stance term.
+	# in TrickState._build_trick_signature(), so there is no stance term.
 	#
 	# Targets are built off the nearest RESTING orientation, not off the raw current angle: popping
 	# again mid-settle would otherwise bake the few unsettled degrees in permanently, and every
@@ -841,7 +844,7 @@ func _execute_pop() -> void:
 	# Spin magnitude comes from the measured signature, never from the display name.
 	if sig.shuv_deg != 0:
 		var spin_deg: float = 360.0 if absi(sig.shuv_deg) == 360 else 180.0
-		target_board_yaw = yaw_rest + (spin_deg * input_state.last_scoop_sign)
+		target_board_yaw = yaw_rest + (spin_deg * trick.last_scoop_sign)
 		is_flip_in_progress = true
 	else:
 		target_board_yaw = yaw_rest
@@ -858,7 +861,7 @@ func _integrate_flight(delta: float) -> void:
 
 	# Layer 1: Aerial Body & Deck Spin Authority (FS/BS 180s/360s via triggers with fluid momentum smoothing)
 	# Applied to board_pivot.y so rolling travel vector and chase camera stay fixed behind the skater!
-	var target_spin: float = input_state.lean * body_spin_speed_deg
+	var target_spin: float = rider.lean * body_spin_speed_deg
 	current_aerial_spin_rate = lerpf(current_aerial_spin_rate, target_spin, 20.0 * delta)
 	if abs(current_aerial_spin_rate) > 0.1:
 		board_pivot.rotation_degrees.y -= current_aerial_spin_rate * delta
@@ -884,7 +887,7 @@ func _integrate_flight(delta: float) -> void:
 			is_flip_in_progress = false
 			board_mesh.rotation_degrees.z = fmod(board_mesh.rotation_degrees.z, 360.0)
 			board_mesh.rotation_degrees.y = fmod(board_mesh.rotation_degrees.y, 360.0)
-			input_state.trick_status_string = "Caught in mid-air!"
+			trick.trick_status_string = "Caught in mid-air!"
 
 	# Touchdown onto whatever surface the probe found - ground, curb top, ramp face.
 	if surface_hit.valid and global_position.y <= _surface_ride_y() and vertical_velocity <= 0.0:
@@ -898,7 +901,7 @@ func _integrate_flight(delta: float) -> void:
 		if landing_dip_ref_speed > 0.0:
 			_landing_dip = minf(impact / landing_dip_ref_speed, 1.0) * landing_dip_max
 		current_aerial_spin_rate = 0.0
-		input_state.current_pop_state = FootInputState.PopState.NONE
+		trick.current_pop_state = TrickState.PopState.NONE
 		_evaluate_touchdown_landing()
 
 ## Step 7. Position integration, blocked by vertical faces. `velocity` is authoritative and is NOT
@@ -992,7 +995,7 @@ func _advance_flip_settle(delta: float) -> void:
 ## sweep achieved since the pop decides what it is CALLED. A 360 shuv that only made it half way is
 ## credited as the 180 it actually did.
 func _credit_achieved_rotation() -> void:
-	var sig: TrickSignature = input_state.current_trick
+	var sig: TrickSignature = trick.current_trick
 	if sig.flip != TrickSignature.Flip.NONE:
 		var roll_turns: int = int(roundf((board_mesh.rotation_degrees.z - _pop_board_roll) / 360.0))
 		if roll_turns == 0:
@@ -1007,9 +1010,9 @@ func _apply_airborne_board_pitch(delta: float) -> void:
 	# Solved RIDER-relative throughout - positive is trailing-end-down - then mapped onto the pivot's
 	# local X by stance_sign() in the single assignment at the end.
 	var target_pitch_deg: float = 0.0
-	var front: Vector2 = input_state.front_stick()
-	var back: Vector2 = input_state.back_stick()
-	var sig: TrickSignature = input_state.current_trick
+	var front: Vector2 = rider.front_stick()
+	var back: Vector2 = rider.back_stick()
+	var sig: TrickSignature = trick.current_trick
 
 	if sig and sig.flip != TrickSignature.Flip.NONE and is_flip_in_progress:
 		target_pitch_deg = sig.flick_tilt_deg
@@ -1025,12 +1028,12 @@ func _apply_airborne_board_pitch(delta: float) -> void:
 ## Folds the body rotation that just happened into the trick signature and resolves its name.
 ## Called only on successful landings - a bail leaves the previous landed trick on display.
 func _finalise_trick_name() -> void:
-	var sig: TrickSignature = input_state.current_trick
+	var sig: TrickSignature = trick.current_trick
 	var half_turns: int = int(round(airborne_body_yaw_deg / 180.0))
 	sig.body_deg = half_turns * 180 * TrickSignature.body_sign(
-		input_state.stance == FootInputState.Stance.GOOFY, pop_riding_reversed)
-	input_state.last_combo_string = TrickNames.resolve(sig)
-	input_state.last_trick_signature = sig.describe()
+		rider.stance == RiderInput.Stance.GOOFY, pop_riding_reversed)
+	trick.last_combo_string = TrickNames.resolve(sig)
+	trick.last_trick_signature = sig.describe()
 
 func _evaluate_touchdown_landing() -> void:
 	# Firmly seat shoes onto deck rest coordinates immediately upon ground contact. An EVENT, which
@@ -1053,7 +1056,7 @@ func _evaluate_touchdown_landing() -> void:
 		var catch_err: float = maxf(roll_err, yaw_err)
 		last_catch_error_deg = catch_err
 		if catch_err > catch_cone_deg:
-			input_state.trick_status_string = "BAIL! (Primo Crash / Incomplete Flip)"
+			trick.trick_status_string = "BAIL! (Primo Crash / Incomplete Flip)"
 			_kill_momentum()
 			board_mesh.rotation_degrees.z = 0.0
 			board_mesh.rotation_degrees.y = 0.0
@@ -1103,7 +1106,7 @@ func _evaluate_touchdown_landing() -> void:
 	var land_axis: Vector3 = _board_axis()
 	last_landing_slide = (flat_v - land_axis * flat_v.dot(land_axis)).length()
 	if last_landing_slide > max_landing_slide:
-		input_state.trick_status_string = "BAIL! (Sideways Landing / Wheel Skid)"
+		trick.trick_status_string = "BAIL! (Sideways Landing / Wheel Skid)"
 		_kill_momentum()
 		board_pivot.rotation_degrees.x = 0.0
 		manual_timer = 0.0
@@ -1112,55 +1115,55 @@ func _evaluate_touchdown_landing() -> void:
 	var pitch: float = board_pivot.rotation_degrees.x
 	var in_manual_zone: bool = false
 	
-	var front: Vector2 = input_state.front_stick()
-	var back: Vector2 = input_state.back_stick()
+	var front: Vector2 = rider.front_stick()
+	var back: Vector2 = rider.back_stick()
 
 	# Check if back or front stick is deflected (>= 0.20) upon touchdown, supporting heavy landings and scoops!
 	var effective_pitch: float = rider_pitch_deg()
-	if effective_pitch > 5.0 and (back.y >= 0.20 or (input_state.current_pop_state == FootInputState.PopState.LOADING_OLLIE and back.length() >= 0.20)):
+	if effective_pitch > 5.0 and (back.y >= 0.20 or (trick.current_pop_state == TrickState.PopState.LOADING_OLLIE and back.length() >= 0.20)):
 		in_manual_zone = true # Touchdown into standard / switch manual!
-	elif effective_pitch < -5.0 and (front.y <= -0.20 or (input_state.current_pop_state == FootInputState.PopState.LOADING_NOLLIE and front.length() >= 0.20)):
+	elif effective_pitch < -5.0 and (front.y <= -0.20 or (trick.current_pop_state == TrickState.PopState.LOADING_NOLLIE and front.length() >= 0.20)):
 		in_manual_zone = true # Touchdown into nose / switch nose manual!
 	
 	if in_manual_zone:
 		# INSTANT MANUAL CATCH: bypass loading delay and continue rolling smoothly!
 		_finalise_trick_name()
-		input_state.trick_status_string = "Landed directly into Manual!"
+		trick.trick_status_string = "Landed directly into Manual!"
 		manual_timer = manual_entry_delay # Instant loading buffer
 	elif abs(pitch) > max_landing_tolerance_deg:
 		# BAIL / WHEEL BITE: landed too steep outside of manual catching zone!
-		input_state.trick_status_string = "BAIL! (Wheel Bite / Over-Pitched)"
+		trick.trick_status_string = "BAIL! (Wheel Bite / Over-Pitched)"
 		_kill_momentum() # Speed penalty for crashing
 		board_pivot.rotation_degrees.x = 0.0
 		manual_timer = 0.0
 	else:
 		# CLEAN LANDING: within tolerances
 		_finalise_trick_name()
-		input_state.trick_status_string = "Landed %s!" % input_state.last_combo_string
+		trick.trick_status_string = "Landed %s!" % trick.last_combo_string
 		manual_timer = 0.0
 
 func _apply_grounded_board_pitch(delta: float) -> void:
 	# Solved RIDER-relative throughout - positive is trailing-end-down - then mapped onto the pivot's
 	# local X by stance_sign() in the single assignment at the end.
 	var target_pitch_deg: float = 0.0
-	var front: Vector2 = input_state.front_stick()
-	var back: Vector2 = input_state.back_stick()
+	var front: Vector2 = rider.front_stick()
+	var back: Vector2 = rider.back_stick()
 	var is_manualing: bool = false
 
 	var was_manualing: bool = manual_timer >= manual_entry_delay or abs(board_pivot.rotation_degrees.x) > 2.0
 
 	# Flatground Manual Entry requires interior balance zone (0.20 to 0.90 vector length) and no active scoop arc (max_swept_angle < 10.0), ensuring outer-rim Shove-it and Varial scoops never lift the nose!
 	# Once an active manual is established, ANY trailing/leading stick load (>= 0.20) latches balance so scoops and heavy pops out of manuals don't drop!
-	var no_scoop: bool = input_state.max_swept_angle < 10.0
-	if (not was_manualing and back.y > 0.20 and back.length() <= 0.90 and no_scoop) or (was_manualing and (back.y >= 0.20 or (input_state.current_pop_state == FootInputState.PopState.LOADING_OLLIE and back.length() >= 0.20))):
+	var no_scoop: bool = trick.max_swept_angle < 10.0
+	if (not was_manualing and back.y > 0.20 and back.length() <= 0.90 and no_scoop) or (was_manualing and (back.y >= 0.20 or (trick.current_pop_state == TrickState.PopState.LOADING_OLLIE and back.length() >= 0.20))):
 		target_pitch_deg = minf(1.0, back.length()) * max_pitch_deg
 		is_manualing = true
-	elif (not was_manualing and front.y < -0.20 and front.length() <= 0.90 and no_scoop) or (was_manualing and (front.y <= -0.20 or (input_state.current_pop_state == FootInputState.PopState.LOADING_NOLLIE and front.length() >= 0.20))):
+	elif (not was_manualing and front.y < -0.20 and front.length() <= 0.90 and no_scoop) or (was_manualing and (front.y <= -0.20 or (trick.current_pop_state == TrickState.PopState.LOADING_NOLLIE and front.length() >= 0.20))):
 		target_pitch_deg = -minf(1.0, front.length()) * max_pitch_deg
 		is_manualing = true
 		
 	# Automatically lift front trucks during Stationary Kickturns ONLY if not already balancing a thumbstick manual!
-	if not is_manualing and not _is_carve_latched and abs(input_state.lean) > 0.05 and Vector3(velocity.x, 0.0, velocity.z).length() < kickturn_max_speed:
+	if not is_manualing and not _is_carve_latched and abs(rider.lean) > 0.05 and Vector3(velocity.x, 0.0, velocity.z).length() < kickturn_max_speed:
 		target_pitch_deg = kickturn_pitch_deg
 		manual_timer = manual_entry_delay
 		

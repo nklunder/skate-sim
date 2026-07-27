@@ -13,7 +13,7 @@ extends Node
 ##   3. SMOOTH. The deck is never teleported to its resting orientation; per-frame rotation stays
 ##      within the angular velocity the trick actually carried.
 ##
-## Drives the REAL SkaterController by writing the state FootInputState would have written.
+## Drives the REAL SkaterController by writing the state RiderInput would have written.
 ## Run: godot --headless --path . res://tests/curb_flip_repro.tscn
 
 const TEST_WORLD := preload("res://scenes/TestWorld.tscn")
@@ -122,20 +122,20 @@ func _physics_process(_delta: float) -> void:
 		return
 	_frame += 1
 
-	# FootInputState._poll_inputs() zeroes the sticks every tick in headless (no device attached).
+	# RiderInput._poll_inputs() zeroes the sticks every tick in headless (no device attached).
 	# This node sits above SkaterRig in tree order, so writing here lands before the controller reads.
 	if _popped and CASES[_case].get("hold_manual", false):
-		_skater.input_state.right_stick_raw = Vector2(0.0, 0.60) # trailing stick, inside 0.20-0.90
+		_skater.rider.right_stick_raw = Vector2(0.0, 0.60) # trailing stick, inside 0.20-0.90
 
 	if _frame == 5:
-		var st: FootInputState = _skater.input_state
+		var st: TrickState = _skater.trick
 		var sig := TrickSignature.new()
 		sig.pop = TrickSignature.Pop.OLLIE
 		sig.flip = TrickSignature.Flip.KICK if CASES[_case]["flip"] else TrickSignature.Flip.NONE
 		sig.shuv_deg = CASES[_case]["shuv"]
 		st.current_trick = sig
 		st.last_scoop_sign = -1.0
-		st.current_pop_state = FootInputState.PopState.POPPED
+		st.current_pop_state = TrickState.PopState.POPPED
 		st.pop_impulse_triggered = true
 		_popped = true
 		_pop_frame = _frame
@@ -164,7 +164,7 @@ func _physics_process(_delta: float) -> void:
 
 	if _skater.is_grounded and _landed_frame < 0:
 		_landed_frame = _frame
-		_status = _skater.input_state.trick_status_string
+		_status = _skater.trick.trick_status_string
 		_speed = _skater.current_speed
 		_catch_err = _skater.last_catch_error_deg
 

@@ -16,7 +16,8 @@
    - `/Applications/Godot.app/Contents/MacOS/Godot --headless --path . res://tests/curb_flip_repro.tscn`
    - `/Applications/Godot.app/Contents/MacOS/Godot --headless --path . res://tests/carve_and_push.tscn`
    - **Compare the printed NUMBERS against the previous run, not just `PASS`/`FAIL`.** Several assertions check magnitudes only, so a drifted sign or a clobbered input can pass silently. A refactor should reproduce every figure exactly.
-5. **Adding a new `class_name` script:** run `--headless --import` once before any test, or the global class cache will not know the type and every consumer fails with `Parse Error: Could not find type "X" in the current scope`.
+5. **Adding a new `class_name` script: run `--headless --import` FIRST.** Until you do, the global class cache does not know the type and *every* consumer fails with `Parse Error: Could not find type "X" in the current scope` — which looks like a broken refactor rather than a stale cache. Verify with `grep -c '<ClassName>' .godot/global_script_class_cache.cfg`.
+6. **A parse error makes a test suite HANG, not fail.** The harness never reaches its `quit()`, so the run sits there until it is killed. If a suite stops producing output, check for `Parse Error` in the log before assuming it is slow.
 
 ---
 
@@ -73,7 +74,13 @@
   - Rest pose (position **and** rotation) is captured from `SkaterRig.tscn` in `_ready()`. Never hardcode foot offsets in script.
 - **`travel_min_speed` lives on `SkaterController`, not the camera:** both the camera's heading and `_travel_axis_sign` ask "is travel readable yet?", and they must not be able to disagree.
 
-### 2. `res://scripts/input/FootInputState.gd` (Input Classification & Trick Nomenclature)
+### 2. Input: `RiderInput.gd` → `TrickState.gd` (two nodes, deliberately)
+- **The chain is `StickPoller` → `RiderInput` → `TrickState`, each layer knowing strictly less about the hardware than the last.** The old `FootInputState` was all three at once — an input reader, a trick state machine, and a scratchpad `SkaterController` wrote back into from six places.
+  - **`res://scripts/input/RiderInput.gd`** — what the rider is doing with the controller and where their feet are on the board: stick vectors, magnitudes, latched buttons, stance facts. **Knows nothing about tricks.**
+  - **`res://scripts/tricks/TrickState.gd`** — what those gestures add up to: pop loading, scoop arc measurement, flick classification, the `TrickSignature`.
+- **Rule — `TrickState` is a CHILD of `RiderInput`, not a sibling.** Godot runs `_physics_process` in tree order, parents first, so the child arrangement is what guarantees the gesture recogniser reads a fully-updated stick rather than a half-updated one. Do not flatten them.
+- **Rule — deflection thresholds are exported, never literals.** `manual_zone_min`, `pop_load_threshold`, `low_pop_knee`, `low_pop_max_ratio`, `flick_min_deflection`, `flick_release_band`, `scoop_min_deflection`, `lateral_pop_deadzone`, `lateral_pop_full` all live on `TrickState`. The lateral-pop lockout keys off `shuv_180_threshold_deg` **itself** rather than a copy of its value, so retuning the shuv threshold cannot silently desynchronise the two.
+
 - **Device polling is isolated in `res://scripts/input/StickPoller.gd`:** the only code that knows a gamepad exists. It returns a `Sample`; everything downstream works from that, which is why the regression suites can drive the controller by writing stick vectors instead of simulating a joypad.
 - **Rule — the poller reports SELECTIONS, not sticky state:** `Sample.camera_side_select` is `0` when the d-pad is idle, and `camera_side` is only assigned on a non-zero. Reporting the live side instead made the poller overwrite `camera_side` every frame, clobbering any value set from outside the device layer.
 - **Debug-only strings stay out of the input tick:** joypad button labels live in `res://scripts/ui/JoyButtonNames.gd` and are polled by `DebugHUD`, not by `_poll_inputs()`.
@@ -86,7 +93,7 @@
   - **Corollary — foot animation is authored in the RIDER frame.** Which foot pops, which flicks, and which way each travels come from `leading_foot`/`trailing_foot`; nose/tail is consulted *only* to ask how much deck exists at that edge. The pop taxonomy already works this way — `OLLIE`/`SWITCH_OLLIE` means the trailing stick loaded, `NOLLIE`/`FAKIE_OLLIE` the leading stick — so it never touches board geometry. Rule: *the flicking foot always travels toward the edge opposite the popping foot.*
 - **Foot Identity is an `enum`, not a String:** Use `Foot { LEFT, RIGHT }` and `DeckEnd { NOSE, TAIL }`. Compare enum values; convert to text **only** at the HUD boundary via `foot_name()` / `deck_end_name()`.
 - **`front_stick()` / `back_stick()`:** Return the leading / trailing foot's stick. Always invoke these rather than re-deriving stance handedness inline.
-- **Arc Sweep Measurement (`max_swept_angle`):** Accumulates frame-to-frame `angle_difference` deltas **in degrees** (`accumulated_scoop_deg`) during pop loading (`LOADING_OLLIE`/`LOADING_NOLLIE`) to prevent wrap-around bugs when sweeps exceed $180^\circ$.
+- **Arc Sweep Measurement (`max_swept_angle`):** Accumulates frame-to-frame `angle_difference` deltas **in degrees** (`_accumulated_scoop_deg`) during pop loading (`LOADING_OLLIE`/`LOADING_NOLLIE`) to prevent wrap-around bugs when sweeps exceed $180^\circ$.
 - **Trick Measurement:** `_build_trick_signature()` populates `current_trick` (a `TrickSignature`) with pop / flip / shuv. It builds **no display strings** — naming happens at touchdown in `SkaterController._finalise_trick_name()`.
 
 ### 2a. 🏷️ Trick Naming (`res://scripts/tricks/`)

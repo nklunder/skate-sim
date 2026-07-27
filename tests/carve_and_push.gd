@@ -116,9 +116,9 @@ func _physics_process(delta: float) -> void:
 	_frame += 1
 
 	# Rewritten every tick: _poll_inputs() zeroes lean with no device attached.
-	_skater.input_state.lean = float(c["lean"])
+	_skater.rider.lean = float(c["lean"])
 	if c.has("push_every") and _frame % int(c["push_every"]) == 0:
-		_skater.input_state.push_right_triggered = true
+		_skater.rider.push_right_triggered = true
 
 	var heading: float = _skater.rotation_degrees.y
 	_turned += rad_to_deg(angle_difference(deg_to_rad(_prev_heading), deg_to_rad(heading)))

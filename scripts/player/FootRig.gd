@@ -4,7 +4,7 @@ extends Node
 ## The rider's feet: shoe boxes and ankle pegs, and every animation that moves them.
 ##
 ## PRESENTATION ONLY, and now provably so. Stance classification moved onto the REST offsets (see
-## FootInputState.update_stance_facts), so no live foot position is read by anything outside this
+## RiderInput.update_stance_facts), so no live foot position is read by anything outside this
 ## file any more. That is what frees the animations below to put a shoe anywhere at all - out over
 ## the nose, off the back of the tail, past the rails - without a hand-maintained "the leading foot
 ## must never cross Z = 0" invariant standing behind them. Move the feet however you like; nothing
@@ -170,10 +170,10 @@ var right_rest: Vector3:
 ## the air cannot start a second kick, and a queue would let button spam bank strokes that fire
 ## after the fact. The caller is free to ignore the result - the physical push impulse is the
 ## controller's business, not the animation's.
-func start_push(foot: FootInputState.Foot) -> bool:
+func start_push(foot: RiderInput.Foot) -> bool:
 	if _left.state != FootState.RIDING or _right.state != FootState.RIDING:
 		return false
-	var channel: Channel = _left if foot == FootInputState.Foot.LEFT else _right
+	var channel: Channel = _left if foot == RiderInput.Foot.LEFT else _right
 	channel.enter(FootState.PUSHING)
 	return true
 
@@ -191,15 +191,15 @@ func settle_now() -> void:
 ##
 ## `camera_yaw` and `board_yaw` are the local yaws of CameraPivot and BoardPivot; see
 ## _drive_ankle_peg() for why both are needed.
-func solve(delta: float, frame: Frame, input_state: FootInputState, camera_yaw: float,
+func solve(delta: float, frame: Frame, rider: RiderInput, camera_yaw: float,
 		board_yaw: float) -> void:
 	var step: float = minf(delta, MAX_STEP)
 	_advance_states(step, frame)
-	_solve_target(_left, true, input_state)
-	_solve_target(_right, false, input_state)
+	_solve_target(_left, true, rider)
+	_solve_target(_right, false, rider)
 	_left.integrate(foot_stiffness, foot_damping_ratio, step)
 	_right.integrate(foot_stiffness, foot_damping_ratio, step)
-	_drive_ankle_pegs(step, input_state, camera_yaw, board_yaw)
+	_drive_ankle_pegs(step, rider, camera_yaw, board_yaw)
 
 ## The arbitration, in one place and in priority order. Read top to bottom: the first branch that
 ## applies owns the foot, so "which animation wins" is answered by where it sits in this list.
@@ -219,21 +219,21 @@ func _advance_states(delta: float, frame: Frame) -> void:
 ## Solves one foot's target pose from its state. Every branch starts at the rest pose and displaces
 ## from it, so nothing an animation writes can leak into the next state - the reason the old
 ## y-only hover() could not be given an x or z term safely.
-func _solve_target(ch: Channel, is_left: bool, input_state: FootInputState) -> void:
+func _solve_target(ch: Channel, is_left: bool, rider: RiderInput) -> void:
 	ch.target_position = ch.rest_position
 	ch.target_rotation = ch.rest_rotation
 	match ch.state:
 		FootState.HOVERING:
 			ch.target_position.y = flip_hover_height
 		FootState.PUSHING:
-			ch.target_position += _push_offset(ch.phase_time, is_left, input_state)
+			ch.target_position += _push_offset(ch.phase_time, is_left, rider)
 
 ## Displacement of a pushing foot at `t` seconds into its stroke: a sinusoidal dip toward the
 ## pavement paired with a forward-to-backward sweeping thrust along Z.
-func _push_offset(t: float, is_left: bool, input_state: FootInputState) -> Vector3:
+func _push_offset(t: float, is_left: bool, rider: RiderInput) -> Vector3:
 	var progress: float = clampf(t / push_anim_duration, 0.0, 1.0)
 	var arc: float = sin(progress * PI)
-	var left_is_leading: bool = input_state.leading_foot == FootInputState.Foot.LEFT
+	var left_is_leading: bool = rider.leading_foot == RiderInput.Foot.LEFT
 	# Mongo means pushing with the LEADING foot. It reaches across to the heel side (-X) while a
 	# standard push steps off the toe side (+X); deriving that from the live stance rather than from
 	# which shoe it is keeps goofy riders stepping off the same side of the board as regular ones.
@@ -243,7 +243,7 @@ func _push_offset(t: float, is_left: bool, input_state: FootInputState) -> Vecto
 		-arc * push_dip,
 		cos(progress * PI) * -push_sweep)
 
-func _drive_ankle_pegs(delta: float, input_state: FootInputState, camera_yaw: float,
+func _drive_ankle_pegs(delta: float, rider: RiderInput, camera_yaw: float,
 		board_yaw: float) -> void:
 	# Each PegPivot hangs under BoardPivot, which yaws to 180 deg in Switch/Fakie while CameraPivot
 	# (parented to SkaterRoot) stays put. Driving the tilt directly in pivot-local degrees therefore
@@ -259,8 +259,8 @@ func _drive_ankle_pegs(delta: float, input_state: FootInputState, camera_yaw: fl
 	var yaw: float = angle_difference(camera_yaw, board_yaw)
 	var yaw_cos: float = cos(yaw)
 	var yaw_sin: float = sin(yaw)
-	_drive_ankle_peg(left_peg_pivot, input_state.left_stick_raw, input_state.left_mag, yaw_cos, yaw_sin, delta)
-	_drive_ankle_peg(right_peg_pivot, input_state.right_stick_raw, input_state.right_mag, yaw_cos, yaw_sin, delta)
+	_drive_ankle_peg(left_peg_pivot, rider.left_stick_raw, rider.left_mag, yaw_cos, yaw_sin, delta)
+	_drive_ankle_peg(right_peg_pivot, rider.right_stick_raw, rider.right_mag, yaw_cos, yaw_sin, delta)
 
 func _drive_ankle_peg(pivot: Node3D, stick: Vector2, mag: float, yaw_cos: float, yaw_sin: float,
 		delta: float) -> void:
