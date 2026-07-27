@@ -25,8 +25,13 @@ var surface_hit: SurfaceProbe.Hit = SurfaceProbe.Hit.new()
 @export_category("Manual & Pitch Tolerances")
 @export var manual_entry_delay: float = 0.08
 @export var max_landing_tolerance_deg: float = 15.0
+## Speed threshold (in m/s) below which trigger turns lift front trucks for a stationary kickturn instead of carving.
+@export var kickturn_max_speed: float = 0.5
+## Automatic board pitch angle (in degrees) when initiating a slow-speed kickturn to lift the front wheels.
+@export var kickturn_pitch_deg: float = 10.0
 var manual_timer: float = 0.0
 var is_grounded: bool = true
+var _is_carve_latched: bool = false
 
 @export_category("Deck Catch Physics")
 ## Shoe-rubber-on-griptape friction coefficient. A rider can stamp an off-axis deck flat while its
@@ -581,7 +586,27 @@ func _apply_steering(delta: float) -> void:
 	# Dampen steering by 80% while preparing pop to safely pre-wind aerial spin without swerving off line!
 	var turn_mult: float = 0.2 if input_state.current_pop_state != FootInputState.PopState.NONE else 1.0
 	var turn_rate: float = input_state.lean * (input_state.board_config.turn_speed if is_instance_valid(input_state.board_config) else 3.0) * turn_mult
-	if is_grounded and abs(input_state.lean) > 0.05:
+	if not is_grounded or abs(input_state.lean) <= 0.05:
+		_is_carve_latched = false
+		return
+		
+	var speed: float = Vector3(velocity.x, 0.0, velocity.z).length()
+	# Latch continuous carving if initiated above kickturn threshold, remaining in carve mode down to near-stall (< 0.05 m/s)
+	if speed >= kickturn_max_speed:
+		_is_carve_latched = true
+	elif speed < 0.05:
+		_is_carve_latched = false
+		
+	if not _is_carve_latched:
+		# Stationary Kickturn: anchor rotation onto trailing rear wheel axle so back tires stay locked to pavement!
+		var left_is_front: bool = input_state.leading_foot == FootInputState.Foot.LEFT
+		var rear_axle_z: float = manual_axle_z if left_is_front else -manual_axle_z
+		var axle_local_pos := Vector3(0.0, -(ride_height - wheel_radius), rear_axle_z)
+		var axle_world_before: Vector3 = to_global(axle_local_pos)
+		rotate_y(-turn_rate * delta)
+		var axle_world_after: Vector3 = to_global(axle_local_pos)
+		global_position += (axle_world_before - axle_world_after)
+	else:
 		rotate_y(-turn_rate * delta)
 
 ## Step 5. The pop: vertical impulse, kicktail pitch, and the deck rotation targets for the trick.
@@ -945,12 +970,20 @@ func _apply_grounded_board_pitch(delta: float) -> void:
 	var left_is_front: bool = input_state.leading_foot == FootInputState.Foot.LEFT
 	var front: Vector2 = input_state.front_stick()
 	var back: Vector2 = input_state.back_stick()
+	var is_manualing: bool = false
 
 	# Manuals trigger in the expanded middle zone between 0.20 and 0.90 on whichever stick corresponds to leading/trailing edge!
 	if back.y > 0.20 and back.y <= 0.90:
 		target_pitch_deg = back.y * 24.0
+		is_manualing = true
 	elif front.y < -0.20 and front.y >= -0.90:
 		target_pitch_deg = front.y * 24.0
+		is_manualing = true
+		
+	# Automatically lift front trucks during Stationary Kickturns ONLY if not already balancing a thumbstick manual!
+	if not is_manualing and not _is_carve_latched and abs(input_state.lean) > 0.05 and Vector3(velocity.x, 0.0, velocity.z).length() < kickturn_max_speed:
+		target_pitch_deg = kickturn_pitch_deg
+		manual_timer = manual_entry_delay
 		
 	if not left_is_front:
 		target_pitch_deg = -target_pitch_deg # Invert local X rotation when board is at Y=180
