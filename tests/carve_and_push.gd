@@ -7,7 +7,7 @@ extends Node
 ## in a car game". Three plausible mechanisms were proposed and all three were DISPROVEN here, which
 ## is why the cases stay: each one now pins the behaviour that was suspected.
 ##
-##   1. `_realigning` latching grip weak forever. It caps grip at speed * landing_turn_rate_deg
+##   1. `_realigning` latching grip weak forever. It capped grip at speed * landing_turn_rate_deg
 ##      (~7 m/s^2 against wheel_side_grip's 40) and clears only under 0.02 m/s of lateral - so a
 ##      sustained carve looked able to regenerate lateral faster than the capped grip removed it and
 ##      keep itself armed. Measured: clears within ~6 frames. Not it.
@@ -48,6 +48,14 @@ var _lead_axle_start: Vector3 = Vector3.ZERO
 var _trail_axle_start: Vector3 = Vector3.ZERO
 var _lead_axle_drift: float = 0.0
 var _trail_axle_drift: float = 0.0
+var _landed: bool = false
+var _air_frames: int = 0
+## Worst off-axis angle seen AFTER the landing residual has had time to work off. The residual
+## itself is a legitimate transient - a 15 deg landing IS 15 deg off-axis on the touchdown frame -
+## so judging on the peak would fail a correct implementation. What must not happen is the board
+## still sliding once the residual is spent.
+var _settled_off_axis: float = 0.0
+const SETTLE_FRAMES: int = 60
 
 # speed: initial roll along the board's own -Z.
 # lean: trigger deflection held for the whole run.
@@ -79,6 +87,22 @@ const CASES := [
 	{"label": "kickturn, forward", "speed": 0.3, "lean": 1.0, "run": 150, "check_anchor": true},
 	{"label": "kickturn switch / after 180", "speed": 0.3, "lean": 1.0, "run": 150,
 		"pivot_yaw": 180.0, "check_anchor": true},
+	# THE SKID. Reported as "on landing, hold a trigger and you start skidding in that direction."
+	#
+	# Touchdown caps wheel grip while the wheels drag travel back onto the board axis, and clears
+	# that cap only once lateral speed falls under 0.02 m/s. Steering GENERATES lateral speed, and at
+	# full lean it generates it faster than the capped grip removes it - so holding a trigger through
+	# a landing stops the cap ever clearing, and the board keeps sliding for as long as you hold it.
+	#
+	# Both lean signs, because the residual has a direction: steering INTO it shrinks lateral and
+	# hides the bug, steering AWAY from it feeds the loop. An earlier version of this suite tested
+	# only the first and wrongly concluded the mechanism was innocent.
+	{"label": "land 15 deg, then hold lean +", "speed": 7.0, "lean": 1.0, "run": 150,
+		"land_yaw": 15.0, "max_settled_off_axis": 4.0, "max_realign_frames": 40},
+	{"label": "land 15 deg, then hold lean -", "speed": 7.0, "lean": -1.0, "run": 150,
+		"land_yaw": 15.0, "max_settled_off_axis": 4.0, "max_realign_frames": 40},
+	{"label": "land -15 deg, then hold lean +", "speed": 7.0, "lean": 1.0, "run": 150,
+		"land_yaw": -15.0, "max_settled_off_axis": 4.0, "max_realign_frames": 40},
 ]
 
 func _ready() -> void:
@@ -97,6 +121,7 @@ func _start_case() -> void:
 	_max_off_axis = 0.0
 	_max_speed = 0.0
 	_max_pos_jump = 0.0
+	_settled_off_axis = 0.0
 	_realigning_frames = 0
 	_prev_pos = _skater.global_position
 	_start_heading = _skater.rotation_degrees.y
@@ -108,11 +133,37 @@ func _start_case() -> void:
 	_trail_axle_start = _axle_world(1.0)
 	_lead_axle_drift = 0.0
 	_trail_axle_drift = 0.0
+	_landed = not CASES[_case].has("land_yaw")
+	_air_frames = 0
 
 func _physics_process(delta: float) -> void:
 	if _reported or _skater == null:
 		return
 	var c: Dictionary = CASES[_case]
+
+	# Landing cases pop first and hold a board yaw through the flight, so touchdown deposits a real
+	# heading residual and arms the grip cap. Measurement starts on the first GROUNDED frame.
+	if c.has("land_yaw") and not _landed:
+		_air_frames += 1
+		if _air_frames == 5:
+			var st: TrickState = _skater.trick
+			var sig := TrickSignature.new()
+			sig.pop = TrickSignature.Pop.OLLIE
+			st.current_trick = sig
+			st.current_pop_state = TrickState.PopState.POPPED
+			st.pop_impulse_triggered = true
+			return
+		if _air_frames > 5 and not _skater.is_grounded:
+			_skater.board_pivot.rotation_degrees.y = c["land_yaw"]
+			return
+		if _air_frames > 5 and _skater.is_grounded:
+			_landed = true
+			_prev_pos = _skater.global_position
+			_prev_heading = _skater.rotation_degrees.y
+			_lead_axle_start = _axle_world(-1.0)
+			_trail_axle_start = _axle_world(1.0)
+		else:
+			return
 	_frame += 1
 
 	# Rewritten every tick: _poll_inputs() zeroes lean with no device attached.
@@ -123,9 +174,11 @@ func _physics_process(delta: float) -> void:
 	var heading: float = _skater.rotation_degrees.y
 	_turned += rad_to_deg(angle_difference(deg_to_rad(_prev_heading), deg_to_rad(heading)))
 	_prev_heading = heading
-	if _skater._realigning:
+	if _skater._landing_residual > 0.0:
 		_realigning_frames += 1
 	_max_off_axis = maxf(_max_off_axis, _travel_vs_board())
+	if _frame > SETTLE_FRAMES:
+		_settled_off_axis = maxf(_settled_off_axis, _travel_vs_board())
 	_max_speed = maxf(_max_speed, _skater.current_speed)
 	# Motion this frame that velocity does not account for. Ordinary integration leaves this at zero;
 	# the kickturn's axle anchoring shows up here, and an anchor flipping axles would show up big.
@@ -166,12 +219,22 @@ func _finish_case() -> void:
 	var c: Dictionary = CASES[_case]
 	var problems: Array[String] = []
 	var turned: float = absf(_turned)
-	var detail: String = "turned %5.1f deg | offAxis %4.1f | peak %4.2f m/s | posJump %.4f m | realign %d/%d" % [
-		turned, _max_off_axis, _max_speed, _max_pos_jump, _realigning_frames, _frame]
+	var detail: String = "turned %5.1f deg | offAxis %4.1f (settled %4.1f) | peak %4.2f m/s | posJump %.4f m | paced %d/%d" % [
+		turned, _max_off_axis, _settled_off_axis, _max_speed, _max_pos_jump, _realigning_frames, _frame]
 
 	if c.has("max_off_axis") and _max_off_axis > float(c["max_off_axis"]):
 		problems.append("slid %.1f deg off the rolling axis (limit %.1f) - drifting, not carving" % [
 			_max_off_axis, c["max_off_axis"]])
+	# For landing cases: the residual is allowed its transient, but once spent the board must track
+	# its wheels again however hard the rider is steering.
+	if c.has("max_settled_off_axis") and _settled_off_axis > float(c["max_settled_off_axis"]):
+		problems.append("still %.1f deg off-axis %d frames after landing (limit %.1f) - the skid never ended" % [
+			_settled_off_axis, SETTLE_FRAMES, c["max_settled_off_axis"]])
+	# The grip cap is a TRANSIENT for working off a landing residual. Steering must never be able to
+	# keep it alive - if it can, the board slides for as long as the trigger is held.
+	if c.has("max_realign_frames") and _realigning_frames > int(c["max_realign_frames"]):
+		problems.append("grip stayed capped for %d of %d frames - steering is feeding the latch" % [
+			_realigning_frames, _frame])
 	if c.has("max_pos_jump") and _max_pos_jump > float(c["max_pos_jump"]):
 		problems.append("rig moved %.4f m unaccounted for by velocity (limit %.4f)" % [
 			_max_pos_jump, c["max_pos_jump"]])

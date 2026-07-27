@@ -229,11 +229,22 @@ var _since_push: float = 1000.0
 ## full lean the board yaws ~172 deg/s, so a permanent cap here would make every hard turn drift.
 ## Same transient-versus-steady-state split the camera needed two rates for.
 @export var landing_turn_rate_deg: float = 60.0
-## True while the wheels are still pulling travel back onto the board axis after a landing. A state
-## flag rather than a fixed window deliberately: how long realignment takes depends on the residual
-## AND the speed, so any fixed duration would expire mid-swing on slow, badly-rotated landings and
-## reintroduce the jerk it was added to remove.
-var _realigning: bool = false
+## Sideways speed still owed from the last landing, in m/s. A BUDGET that only ever shrinks - never
+## a state flag inferred from live lateral speed.
+##
+## That distinction is the whole fix for the landing skid. The old version was a boolean latch that
+## capped grip and cleared itself once live lateral fell under 0.02 m/s. But steering GENERATES
+## lateral speed, and at full lean it generates it faster than the capped grip removes it - so
+## holding a trigger through a touchdown meant the clear condition never arrived, the cap never
+## lifted, and the board slid sideways for as long as the trigger was held. Weak grip kept lateral
+## high, and high lateral kept grip weak: a positive feedback loop the rider drove directly.
+##
+## The flaw underneath was that one number could not tell two things apart - sideways speed LEFT
+## OVER from the landing, which should be worked off smoothly at a paced rate, and sideways speed
+## the rider is CREATING right now by carving, which the wheels should fight at full strength.
+## Recording the residual explicitly at touchdown separates them: it decays on its own schedule and
+## nothing the rider does can top it back up.
+var _landing_residual: float = 0.0
 ## THE authoritative motion state, in world space. Deliberately not rebuilt from orientation each
 ## frame: `velocity = -basis.z * current_speed` made travel and facing the same quantity, so the
 ## skater could only ever move exactly where the board pointed. That is what forced landings to snap
@@ -573,15 +584,23 @@ func _apply_ground_forces(delta: float) -> void:
 	# now has weight to it.
 	var axis: Vector3 = _board_axis()
 	var lateral: Vector3 = flat - axis * flat.dot(axis)
-	# While realigning from a landing, cap the lateral force at whatever turns travel no faster than
-	# landing_turn_rate_deg. Lateral speed relates to heading as v_lat ~= speed * angle, so bounding
-	# the force to speed * angular_rate bounds the angle swing directly, at any speed.
-	var grip: float = wheel_side_grip
-	if _realigning:
-		grip = minf(grip, flat.length() * deg_to_rad(landing_turn_rate_deg))
-		if lateral.length() < 0.02:
-			_realigning = false
-	flat += lateral.move_toward(Vector3.ZERO, grip * delta) - lateral
+
+	# The landing residual melts at a paced rate rather than being scrubbed off by grip. Lateral
+	# speed relates to heading as v_lat ~= speed * angle, so draining the budget at
+	# speed * angular_rate turns travel at exactly landing_turn_rate_deg, at any speed - which is
+	# what makes a crooked landing swing into line smoothly instead of snapping.
+	_landing_residual = maxf(0.0,
+		_landing_residual - flat.length() * deg_to_rad(landing_turn_rate_deg) * delta)
+
+	# Grip then removes everything ABOVE that budget at full strength. Two consequences, and they
+	# are the entire point:
+	#   - At touchdown lateral equals the budget, so limit_length() is a no-op and the residual
+	#     works off at the paced rate. The landing feels exactly as it did.
+	#   - Lateral the rider adds by STEERING sits above the budget, so it meets full grip and is
+	#     scrubbed immediately. Carving stays tight, and a held trigger can no longer prop the
+	#     board sideways, because nothing the rider does can raise the budget.
+	# Once the budget reaches zero this is a plain move_toward(ZERO), i.e. ordinary wheel grip.
+	flat += lateral.move_toward(lateral.limit_length(_landing_residual), wheel_side_grip * delta) - lateral
 
 	# Rolling friction opposes travel and can never reverse it. move_toward lands exactly on zero, so
 	# a gradient whose fall line is weaker than friction simply has everything gravity just added
@@ -899,7 +918,6 @@ func _integrate_flight(delta: float) -> void:
 		global_position.y = _surface_ride_y()
 		vertical_velocity = 0.0
 		is_grounded = true
-		_realigning = true
 		if landing_dip_ref_speed > 0.0:
 			_landing_dip = minf(impact / landing_dip_ref_speed, 1.0) * landing_dip_max
 		current_aerial_spin_rate = 0.0
@@ -1107,7 +1125,12 @@ func _evaluate_touchdown_landing() -> void:
 	var flat_v := Vector3(velocity.x, 0.0, velocity.z)
 	var land_axis: Vector3 = _board_axis()
 	last_landing_slide = (flat_v - land_axis * flat_v.dot(land_axis)).length()
+	# Arm the realignment budget with the sideways speed actually arrived with. Set HERE, where that
+	# speed is measured, and nowhere else - a second writer is exactly how it would start growing
+	# again, which is the failure the budget replaced.
+	_landing_residual = last_landing_slide
 	if last_landing_slide > max_landing_slide:
+		_landing_residual = 0.0 # Washed out; momentum is killed below, so there is nothing to pace.
 		trick.trick_status_string = "BAIL! (Sideways Landing / Wheel Skid)"
 		_kill_momentum()
 		board_pivot.rotation_degrees.x = 0.0
