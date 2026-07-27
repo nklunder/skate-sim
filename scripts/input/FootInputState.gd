@@ -42,14 +42,16 @@ var lean: float = 0.0 # RT - LT
 ## front depends on stance, so the stance-relative names would mean opposite things for a regular
 ## and a goofy rider while the camera did exactly the same thing.
 var camera_side: int = 1
-var current_button_string: String = "None"
 
 # Push Detection & Stroke Classification
 var push_left_triggered: bool = false
 var push_right_triggered: bool = false
-var _prev_push_left: bool = false
-var _prev_push_right: bool = false
 var last_push_type: String = "None"
+
+## Reads the physical devices. The only thing in this file that knows a gamepad exists - everything
+## below works from the Sample it returns, which is also why the regression suites can drive the
+## controller by writing stick vectors directly instead of simulating a joypad.
+var _poller := StickPoller.new()
 
 # Trick & Combo State Tracking
 var current_pop_state: PopState = PopState.NONE
@@ -61,7 +63,10 @@ var last_pop: TrickSignature.Pop = TrickSignature.Pop.OLLIE
 ## Measurement of the trick in progress. Populated at pop with pop/flip/shuv; SkaterController
 ## fills in body_deg at touchdown, once the body rotation has actually happened.
 var current_trick: TrickSignature = TrickSignature.new()
-var active_flip_type: String = "None"
+## The flip the current pop is classified as. An enum for the same reason `Foot` is: this value is
+## LOGIC, not display - it is mirrored for nollie/fakie below and copied straight onto the signature -
+## and as a String a typo compiled cleanly and silently produced no flip at all.
+var active_flip: TrickSignature.Flip = TrickSignature.Flip.NONE
 var last_scoop_sign: float = -1.0
 var max_swept_angle: float = 0.0
 var accumulated_scoop_deg: float = 0.0
@@ -70,7 +75,6 @@ var last_combo_string: String = "None"
 ## Readout of the last landed trick's measured signature, shown on the HUD so table rows can be
 ## authored by observation rather than by reasoning about rotation conventions.
 var last_trick_signature: String = "-"
-var _prev_space_pressed: bool = false
 
 # Live Facts
 var leading_foot: Foot = Foot.LEFT
@@ -100,101 +104,31 @@ func _physics_process(_delta: float) -> void:
 	_classify_push_strokes()
 	_detect_pop_load_and_flick()
 
+## Applies one frame of device state onto the live input values. Everything the hardware knows
+## enters the input system through this function and no other.
 func _poll_inputs() -> void:
-	# Joypad input + keyboard fallback (WASD for Left Foot, IJKL for Right Foot)
-	var lx: float = Input.get_joy_axis(0, JOY_AXIS_LEFT_X)
-	var ly: float = Input.get_joy_axis(0, JOY_AXIS_LEFT_Y)
-	if abs(lx) < 0.1 and abs(ly) < 0.1:
-		lx = float(Input.is_physical_key_pressed(KEY_D)) - float(Input.is_physical_key_pressed(KEY_A))
-		ly = float(Input.is_physical_key_pressed(KEY_S)) - float(Input.is_physical_key_pressed(KEY_W))
-		if abs(lx) < 0.1 and abs(ly) < 0.1:
-			lx = Input.get_action_strength("ui_right") - Input.get_action_strength("ui_left") if not Input.is_physical_key_pressed(KEY_L) and not Input.is_physical_key_pressed(KEY_J) else 0.0
-			ly = Input.get_action_strength("ui_down") - Input.get_action_strength("ui_up") if not Input.is_physical_key_pressed(KEY_K) and not Input.is_physical_key_pressed(KEY_I) else 0.0
-	
-	# Apply outer-rim deadzone clamping to eliminate sensor fluctuations at full deflection
-	left_stick_raw = Vector2(lx, ly).limit_length(1.0)
-	if left_stick_raw.length() > 0.95:
-		left_stick_raw = left_stick_raw.normalized()
-	
-	var rx: float = Input.get_joy_axis(0, JOY_AXIS_RIGHT_X)
-	var ry: float = Input.get_joy_axis(0, JOY_AXIS_RIGHT_Y)
-	if abs(rx) < 0.1 and abs(ry) < 0.1:
-		rx = float(Input.is_physical_key_pressed(KEY_L)) - float(Input.is_physical_key_pressed(KEY_J))
-		ry = float(Input.is_physical_key_pressed(KEY_K)) - float(Input.is_physical_key_pressed(KEY_I))
-		
-	right_stick_raw = Vector2(rx, ry).limit_length(1.0)
-	if right_stick_raw.length() > 0.95:
-		right_stick_raw = right_stick_raw.normalized()
-	
-	var lt: float = Input.get_joy_axis(0, JOY_AXIS_TRIGGER_LEFT)
-	var rt: float = Input.get_joy_axis(0, JOY_AXIS_TRIGGER_RIGHT)
-	if lt < 0.05 and rt < 0.05:
-		lt = float(Input.is_physical_key_pressed(KEY_Q))
-		rt = float(Input.is_physical_key_pressed(KEY_E))
-	var raw_lean: float = rt - lt
-	# Apply audio-log power curve (exponent 2.2) to desensitize light-to-mid trigger pulls while preserving full speed at 1.0
-	lean = signf(raw_lean) * pow(absf(raw_lean), 2.2)
-	
-	# Chase camera side select on the d-pad. Absolute rather than a toggle: pressing the same side
-	# twice is a no-op, so the view you get is never a function of the view you had.
-	if Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_LEFT) or Input.is_physical_key_pressed(KEY_BRACKETLEFT):
-		camera_side = -1
-	elif Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_RIGHT) or Input.is_physical_key_pressed(KEY_BRACKETRIGHT):
-		camera_side = 1
+	var s: StickPoller.Sample = _poller.poll()
+	left_stick_raw = s.left
+	right_stick_raw = s.right
+	lean = s.lean
+	# Only on an actual selection, so the sticky side survives frames where the d-pad is idle - and
+	# so anything that sets camera_side from outside the device layer is not clobbered next tick.
+	if s.camera_side_select != 0:
+		camera_side = s.camera_side_select
 
-	# Push Button polling (Joypad Y/Triangle for Left Foot, B/Circle for Right Foot; V / B for keyboard)
-	var curr_push_left: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_Y) or Input.is_physical_key_pressed(KEY_V)
-	var curr_push_right: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_B) or Input.is_physical_key_pressed(KEY_B)
-	
 	# Latch push triggers so button presses aren't dropped before SkaterController evaluation
-	if curr_push_left and not _prev_push_left:
+	if s.push_left_edge:
 		push_left_triggered = true
-	if curr_push_right and not _prev_push_right:
+	if s.push_right_edge:
 		push_right_triggered = true
-	_prev_push_left = curr_push_left
-	_prev_push_right = curr_push_right
-	
+
 	# Spacebar fallback for keyboard jumping with Z (Kickflip) / X (Heelflip) / C (Shove-it)
-	var curr_space: bool = Input.is_physical_key_pressed(KEY_SPACE)
-	if curr_space and not _prev_space_pressed and current_pop_state != PopState.POPPED:
+	if s.pop_edge and current_pop_state != PopState.POPPED:
 		pop_impulse_triggered = true
 		pop_lateral_impulse_ratio = 0.0
 		current_pop_state = PopState.POPPED
 		_set_pop(TrickSignature.Pop.OLLIE)
 		_build_trick_signature()
-	_prev_space_pressed = curr_space
-	
-	# Poll all controller buttons to aid telemetry and button remapping
-	var pressed_btns: Array[String] = []
-	for btn_idx in 64:
-		if Input.is_joy_button_pressed(0, btn_idx):
-			pressed_btns.append(_get_joy_button_name(btn_idx))
-	current_button_string = "None" if pressed_btns.is_empty() else ", ".join(pressed_btns)
-
-func _get_joy_button_name(btn: int) -> String:
-	match btn:
-		JOY_BUTTON_A: return "0 (A / Cross)"
-		JOY_BUTTON_B: return "1 (B / Circle)"
-		JOY_BUTTON_X: return "2 (X / Square)"
-		JOY_BUTTON_Y: return "3 (Y / Triangle)"
-		JOY_BUTTON_BACK: return "4 (Back / Select / Share)"
-		JOY_BUTTON_GUIDE: return "5 (Guide / PS / Home)"
-		JOY_BUTTON_START: return "6 (Start / Options)"
-		JOY_BUTTON_LEFT_STICK: return "7 (L3 / Left Stick)"
-		JOY_BUTTON_RIGHT_STICK: return "8 (R3 / Right Stick)"
-		JOY_BUTTON_LEFT_SHOULDER: return "9 (L1 / Left Bumper)"
-		JOY_BUTTON_RIGHT_SHOULDER: return "10 (R1 / Right Bumper)"
-		JOY_BUTTON_DPAD_UP: return "11 (D-Pad Up)"
-		JOY_BUTTON_DPAD_DOWN: return "12 (D-Pad Down)"
-		JOY_BUTTON_DPAD_LEFT: return "13 (D-Pad Left)"
-		JOY_BUTTON_DPAD_RIGHT: return "14 (D-Pad Right)"
-		JOY_BUTTON_MISC1: return "15 (Misc 1 / Share / Mic)"
-		JOY_BUTTON_PADDLE1: return "16 (Paddle 1 / Upper Right)"
-		JOY_BUTTON_PADDLE2: return "17 (Paddle 2 / Upper Left)"
-		JOY_BUTTON_PADDLE3: return "18 (Paddle 3 / Lower Right)"
-		JOY_BUTTON_PADDLE4: return "19 (Paddle 4 / Lower Left)"
-		JOY_BUTTON_TOUCHPAD: return "20 (Touchpad Click)"
-		_: return "%d (Raw Button)" % btn
 
 func _detect_pop_load_and_flick() -> void:
 	if current_pop_state == PopState.POPPED:
@@ -280,7 +214,7 @@ func _set_pop(p: TrickSignature.Pop) -> void:
 ## happens during flight - so SkaterController fills body_deg in at touchdown and resolves the name
 ## there. Nothing here builds a display string; naming lives entirely in TrickNames.gd.
 func _build_trick_signature() -> void:
-	active_flip_type = "None"
+	active_flip = TrickSignature.Flip.NONE
 
 	var sig := TrickSignature.new()
 	sig.pop = last_pop
@@ -302,9 +236,9 @@ func _build_trick_signature() -> void:
 	var max_slope: float = tan(deg_to_rad(max_flick_up_angle_deg if flick_stick.y <= 0.0 else max_flick_down_angle_deg))
 	if flick_stick.length() >= 0.25 and absf(flick_stick.y) <= absf(flick_stick.x) * max_slope:
 		if flick_is_left_foot:
-			active_flip_type = "Kickflip" if flick_stick.x < 0.0 else "Heelflip"
+			active_flip = TrickSignature.Flip.KICK if flick_stick.x < 0.0 else TrickSignature.Flip.HEEL
 		else:
-			active_flip_type = "Kickflip" if flick_stick.x > 0.0 else "Heelflip"
+			active_flip = TrickSignature.Flip.KICK if flick_stick.x > 0.0 else TrickSignature.Flip.HEEL
 		
 		var tilt_ratio: float = clampf((flick_stick.y / absf(flick_stick.x)) / max_slope, -1.0, 1.0)
 		if tilt_ratio < 0.0:
@@ -312,19 +246,18 @@ func _build_trick_signature() -> void:
 		else:
 			sig.flick_tilt_deg = tilt_ratio * max_rocketed_tilt_deg
 	elif Input.is_physical_key_pressed(KEY_Z) or Input.is_physical_key_pressed(KEY_F):
-		active_flip_type = "Kickflip"
+		active_flip = TrickSignature.Flip.KICK
 	elif Input.is_physical_key_pressed(KEY_X) or Input.is_physical_key_pressed(KEY_G):
-		active_flip_type = "Heelflip"
-		
+		active_flip = TrickSignature.Flip.HEEL
+
 	# In Fakie and Nollie stance the flicking foot swaps ends, so the physical flick maps to the opposite deck
 	# roll. Mirror the classification to keep both HUD trick terminology and control-to-rotation behaviour accurate.
-	if (last_pop == TrickSignature.Pop.FAKIE_OLLIE or last_pop == TrickSignature.Pop.NOLLIE) and active_flip_type != "None":
-		active_flip_type = "Heelflip" if active_flip_type == "Kickflip" else "Kickflip"
+	if (last_pop == TrickSignature.Pop.FAKIE_OLLIE or last_pop == TrickSignature.Pop.NOLLIE) \
+			and active_flip != TrickSignature.Flip.NONE:
+		active_flip = TrickSignature.Flip.HEEL if active_flip == TrickSignature.Flip.KICK \
+			else TrickSignature.Flip.KICK
 
-	match active_flip_type:
-		"Kickflip": sig.flip = TrickSignature.Flip.KICK
-		"Heelflip": sig.flip = TrickSignature.Flip.HEEL
-		_: sig.flip = TrickSignature.Flip.NONE
+	sig.flip = active_flip
 
 	var is_360_shuv: bool = (max_swept_angle >= shuv_360_threshold_deg or Input.is_physical_key_pressed(KEY_H))
 	if is_360_shuv or (max_swept_angle >= shuv_180_threshold_deg or Input.is_physical_key_pressed(KEY_C)):

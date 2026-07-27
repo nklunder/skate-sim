@@ -10,7 +10,11 @@
 >    - Architectural or design decisions are established (e.g., via `/grill-me` interviews).
 >    - New features, trick mechanics, or physics adjustments are deployed and verified (log major feature completions to `docs/CHANGELOG_LEDGER.md`).
 >    - A new known bug or feature request is identified (if a major bug is resolved, migrate its post-mortem to `docs/BUG_ARCHIVE.md`).
-> 4. **Validation Routine:** Whenever scripts are edited, proactively execute headless validation using `/Applications/Godot.app/Contents/MacOS/Godot --headless --quit` before reporting completion.
+> 4. **Validation Routine:** Whenever scripts are edited, proactively execute headless validation using `/Applications/Godot.app/Contents/MacOS/Godot --headless --quit` before reporting completion. Then run both regression suites:
+   - `/Applications/Godot.app/Contents/MacOS/Godot --headless --path . res://tests/ground_physics.tscn`
+   - `/Applications/Godot.app/Contents/MacOS/Godot --headless --path . res://tests/curb_flip_repro.tscn`
+   - **Compare the printed NUMBERS against the previous run, not just `PASS`/`FAIL`.** Several assertions check magnitudes only, so a drifted sign or a clobbered input can pass silently. A refactor should reproduce every figure exactly.
+5. **Adding a new `class_name` script:** run `--headless --import` once before any test, or the global class cache will not know the type and every consumer fails with `Parse Error: Could not find type "X" in the current scope`.
 
 ---
 
@@ -47,7 +51,17 @@
   - **Sideways Landing Window ($\pm 45^\circ$):** Touching down within $\pm 45^\circ$ of straight ($0^\circ/180^\circ$) snaps to orientation. Landing sideways perpendicular to travel direction fires a `"BAIL! (Sideways Landing / Wheel Skid)"` speed crash!
 - **Simulation Speed Calibration:** Cruising max speed is calibrated to `7.0 m/s` ($\approx 15.7\text{ mph}$) with `2.0 m/s` foot pushes and `608 deg/s` flip rotation speeds.
 
+### 1a. 🎬 Frame Pipeline & Extracted Nodes
+- **`SkaterController._physics_process()` is an ORDERED PIPELINE, not a bag of updates.** Each numbered step is a named method (`_update_grounded_state()`, `_apply_push_inputs()`, `_execute_pop()`, `_integrate_flight()`, `_integrate_position()`, …). Reordering the calls is a behaviour change even though no method body changes.
+- **Rule — Presentation nodes are driven by explicit calls, never their own `_physics_process`:** `ChaseCamera.follow(delta)` and `FootRig.animate()/hover()/lower()/settle()` are invoked from the pipeline so their ordering is visible in code. A self-driven `_physics_process` would make it a property of node order in `SkaterRig.tscn` — invisible, and a one-frame lag the moment anyone reorders the tree.
+- **`res://scripts/player/ChaseCamera.gd`** (on `CameraPivot`): owns all camera framing (`camera_follow_speed`, `camera_max_swing_deg`, `camera_side_offset_deg/_m`, `camera_position_damp`). MUST run after step 7 integrates position, or it frames where the skater *was*.
+- **`res://scripts/player/FootRig.gd`** (under `BoardPivot`): shoe boxes, ankle pegs, push strokes, flip hover. **Presentation only** — no probe, landing check or velocity term reads a foot position. The one exception is `update_stance_facts()`, which is handed `foot_rig.left_foot` / `.right_foot` directly.
+- **`travel_min_speed` lives on `SkaterController`, not the camera:** both the camera's heading and `_travel_axis_sign` ask "is travel readable yet?", and they must not be able to disagree.
+
 ### 2. `res://scripts/input/FootInputState.gd` (Input Classification & Trick Nomenclature)
+- **Device polling is isolated in `res://scripts/input/StickPoller.gd`:** the only code that knows a gamepad exists. It returns a `Sample`; everything downstream works from that, which is why the regression suites can drive the controller by writing stick vectors instead of simulating a joypad.
+- **Rule — the poller reports SELECTIONS, not sticky state:** `Sample.camera_side_select` is `0` when the d-pad is idle, and `camera_side` is only assigned on a non-zero. Reporting the live side instead made the poller overwrite `camera_side` every frame, clobbering any value set from outside the device layer.
+- **Debug-only strings stay out of the input tick:** joypad button labels live in `res://scripts/ui/JoyButtonNames.gd` and are polled by `DebugHUD`, not by `_poll_inputs()`.
 - **Stance Tracking:** Dynamically evaluates `leading_foot` and `trailing_foot` using travel velocity dot product when moving, or the **`SkaterRoot` forward vector passed in as `root`** when stationary. Ensures accurate switch foot recognition even when standing still.
 - **Foot Identity is an `enum`, not a String:** Use `Foot { LEFT, RIGHT }` and `DeckEnd { NOSE, TAIL }`. Compare enum values; convert to text **only** at the HUD boundary via `foot_name()` / `deck_end_name()`.
 - **`front_stick()` / `back_stick()`:** Return the leading / trailing foot's stick. Always invoke these rather than re-deriving stance handedness inline.
@@ -78,9 +92,9 @@
 - **LOD Tiers & Shader:** Low tier (`use_low_poly = true`, default `8,328` tris) synthesizes tangents on import. Both top and bottom share a single mesh surface; color split (griptape top vs high-vis orange underside `Color(0.95, 0.30, 0.02)`) is executed per-fragment off model-space normals in `deck_two_tone.gdshader`.
 
 ### 4. `res://scenes/player/SkaterRig.tscn` (Scene Tree & Telemetry UI)
-- Contains `BoardPivot`, `BoardMesh`, truck contact raycasts, foot nodes (`LeftFoot`, `RightFoot`), and `CameraPivot`.
+- Contains `BoardPivot`, `BoardMesh`, truck contact raycasts, foot nodes (`LeftFoot`, `RightFoot`), the `FootRig` driver node, and `CameraPivot` (which carries `ChaseCamera.gd`).
 - Foot meshes represent US 11 M shoes (`28 cm` length, `9.8 cm` width, `3.8 cm` height) seated at `X = -0.025m` to balance toe/heel overhang.
-- **Rule:** `left_foot_rest` / `right_foot_rest` are captured from this scene in `SkaterController._ready()`. Never re-hardcode foot rest offsets in script.
+- **Rule:** `left_foot_rest` / `right_foot_rest` are captured from this scene in `FootRig._ready()`. Never re-hardcode foot rest offsets in script.
 - **Shadow Tuning:** `DirectionalLight3D` runs tuned biases (`shadow_bias = 0.02`, `shadow_normal_bias = 0.1`, `directional_shadow_max_distance = 25.0`) to prevent peter-panning at centimeter scale. `AnklePeg` meshes have `cast_shadow = 0` (OFF).
 
 ---

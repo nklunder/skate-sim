@@ -68,90 +68,21 @@ var last_catch_error_deg: float = 0.0
 var _landing_dip: float = 0.0
 
 @export_category("Camera")
-## How tightly the chase camera converges on the yaw it is heading for.
-##
-## Governs CONTINUOUS tracking only - steering, essentially. Trail during a turn is roughly
-## turn_rate / this at sustained full lean, so ~7 deg at the default 3.0 rad/s. Raise for a tighter,
-## more rigid feel; lower for a looser one. Very high values reproduce rigid parenting exactly.
-##
-## Paired with camera_max_swing_deg, which paces the GOAL. A single rate could not serve both: fast
-## enough that ground turns do not feel boaty was far too fast for a half-turn reversal, and slow
-## enough to pace the reversal made every turn feel like steering a barge.
-@export var camera_follow_speed: float = 25.0
-## Fastest the camera may swing around the skater, in degrees per second.
-##
-## Set comfortably above the ~172 deg/s the board can yaw under full lean, so ordinary steering
-## passes through untouched and only genuine REORIENTATIONS are paced - chiefly reversing down a
-## bank, which asks the camera for most of a half-turn at once.
-##
-## This replaced a spring-damped "jump offset" that absorbed landing residuals and handed them back.
-## That machinery existed solely because the camera tracked the BOARD's heading, which jumps at
-## touchdown. Tracking travel removed the jumps, so the workaround went with them.
-@export var camera_max_swing_deg: float = 220.0
-## ORBIT component of the side view: how far around the skater the camera swings, in degrees.
-##
-## Kept small on purpose. Orbiting rotates the camera's AIM, so the direction of travel stops
-## pointing at the centre of the screen and the world streams diagonally - on a wide FOV the
-## asymmetric perspective stretch reads as genuine distortion, not just an angle. The visible part of
-## the side view is camera_side_offset_m instead, which shifts the viewpoint without turning it.
-##
-## What this still does, and why it must not be zero: it is the entire tie-break for a travel
-## reversal. Anchored to the rig's lateral axis, so the rider's sides do not move when gravity turns
-## them round - the camera must therefore cross to the other side RELATIVE TO TRAVEL, and the swing
-## becomes 180 - 2x this one way against 180 + 2x the other. Ordinary shortest-path smoothing then
-## picks the direction on its own. At 0 a dead-straight reversal is a true coin-flip, and would need
-## a stored swing sign or some other rule invented for it. Even a few degrees is a decisive margin -
-## the difference is real, not floating-point noise.
-@export var camera_side_offset_deg: float = 2.5
-## POSITIONAL component: how far the camera slides sideways, in metres. This is the part you see.
-##
-## Shifts the viewpoint while the aim stays along travel, so the vanishing point stays centred and
-## the skater sits off-centre instead - an over-the-shoulder framing rather than a lean. Contributes
-## nothing to the reversal tie-break, which is why the orbit term above survives at all.
-@export var camera_side_offset_m: float = 0.26
-## How quickly the view slides across when the d-pad selects the other side. Low is a deliberate
-## sweep; high snaps. Smooths the SELECTION rather than the two offsets separately, so the orbit and
-## the slide always move together and cannot disagree part-way through a switch.
-@export var camera_side_switch_speed: float = 3.5
-@onready var camera_boom: Camera3D = $CameraPivot/Camera3D
-## Authored camera offset, captured in _ready() so the lateral slide has a fixed origin to work from
-## rather than accumulating onto whatever it left behind last frame.
-var _camera_boom_rest: Vector3 = Vector3.ZERO
-var _camera_lateral: float = 0.0
-## Selected side, smoothed to a continuous -1..+1. Passing through zero mid-switch sweeps the camera
-## through dead centre, which is what makes the change read as a move rather than a cut.
-var _camera_side_smooth: float = 1.0
-## Below this ground speed the camera holds its last heading instead of reading a new one.
+## The chase camera. Everything about HOW it frames the skater lives on ChaseCamera.gd; the rig only
+## decides WHEN it advances, by calling follow() at the end of the frame pipeline.
+@onready var camera_pivot: ChaseCamera = $CameraPivot
+## Below this ground speed the direction of travel is treated as unreadable and the last known
+## heading is held instead.
 ##
 ## The heading of a near-zero velocity is noise, and that is precisely the state at the top of a
-## bank in the instant before the reversal. Holding here is also what makes the swing wait until the
-## skater is genuinely moving back down rather than twitching at the apex.
-@export var camera_travel_min_speed: float = 0.6
-## How hard the camera's follow position is corrected toward the skater.
-##
-## Velocity is fed forward before this is applied, so riding at a constant speed produces NO lag at
-## all and the framing is exactly as authored. Only CHANGES in motion - landings, wall stops - let
-## the camera fall behind and catch up, which is where the sense of weight comes from. This is also
-## the seam to hang per-trick camera work off later (grinds, manuals): offset the follow position and
-## everything downstream keeps working.
-@export var camera_position_damp: float = 12.0
-@onready var camera_pivot: Node3D = $CameraPivot
-## Smoothed world yaw of the camera, tracked separately from the rig's so the two can diverge.
-var _camera_yaw: float = 0.0
-## Rate-limited yaw the camera is heading for. Separate from _camera_yaw so the limiter paces the
-## GOAL while the lerp softens the start and stop of the move - a bare rate limit would begin and end
-## the swing with a step change in angular velocity.
-var _camera_target_yaw: float = 0.0
-## Last heading of travel worth trusting. Updated only above camera_travel_min_speed, so a skater
-## hanging at the top of a bank keeps the heading they arrived with instead of reading noise.
-var _travel_heading: float = 0.0
+## bank in the instant before a reversal. Lives here rather than on the camera because travel is a
+## physics quantity: both the camera's heading and the rolling-direction sign below ask this same
+## question, and they must not be able to disagree about the answer.
+@export var travel_min_speed: float = 0.6
 ## Persistent travel direction sign along the board's rolling axis (+1.0 for forward, -1.0 for backward).
-## Updated above camera_travel_min_speed so when stalling to a stop, pushing and stance checks preserve
+## Updated above travel_min_speed so when stalling to a stop, pushing and stance checks preserve
 ## rolling direction instead of resetting to static rig forward.
 var _travel_axis_sign: float = 1.0
-## Damped world position the camera orbits around. NOT simply the skater's position: see
-## camera_position_damp.
-var _camera_pos: Vector3 = Vector3.ZERO
 
 @export_category("Aerial & Jump Physics")
 @export var jump_impulse: float = 5.2
@@ -204,10 +135,10 @@ var pop_riding_reversed: bool = false
 @onready var surface_align: Node3D = $SurfaceAlign
 @onready var board_pivot: Node3D = $SurfaceAlign/BoardPivot
 @onready var board_mesh: Node3D = $SurfaceAlign/BoardPivot/BoardMesh
-@onready var left_foot: MeshInstance3D = $SurfaceAlign/BoardPivot/LeftFoot
-@onready var right_foot: MeshInstance3D = $SurfaceAlign/BoardPivot/RightFoot
-@onready var left_peg_pivot: Node3D = $SurfaceAlign/BoardPivot/LeftFoot/PegPivot
-@onready var right_peg_pivot: Node3D = $SurfaceAlign/BoardPivot/RightFoot/PegPivot
+## The rider's feet and every animation that moves them. Presentation only - see FootRig.gd. The
+## controller still reads foot_rig.left_foot / .right_foot for the stance test, which is the one
+## place a foot POSITION feeds a decision.
+@onready var foot_rig: FootRig = $SurfaceAlign/BoardPivot/FootRig
 
 @export_category("Motion & Push Physics")
 @export var max_push_speed: float = 7.0 # Ceiling on PUSHING only - gravity may exceed it downhill.
@@ -261,7 +192,6 @@ var _since_touchdown: float = 1000.0
 ## AND the speed, so any fixed duration would expire mid-swing on slow, badly-rotated landings and
 ## reintroduce the jerk it was added to remove.
 var _realigning: bool = false
-@export var peg_tilt_deg: float = 35.0 # Max ankle peg lean at full stick deflection
 ## THE authoritative motion state, in world space. Deliberately not rebuilt from orientation each
 ## frame: `velocity = -basis.z * current_speed` made travel and facing the same quantity, so the
 ## skater could only ever move exactly where the board pointed. That is what forced landings to snap
@@ -310,27 +240,10 @@ var vertical_velocity: float:
 	get: return velocity.y
 	set(value): velocity.y = value
 
-# Foot Push Animation State (Elevated to Y = 0.055 to prevent board collisions).
-# Rest poses are captured from SkaterRig.tscn in _ready() so foot placement has exactly one
-# source of truth; hardcoding them here silently reverted any offset set in the scene as soon
-# as a push stroke finished.
-var left_foot_rest: Vector3 = Vector3(-0.025, 0.055, -0.25)
-var right_foot_rest: Vector3 = Vector3(-0.025, 0.055, 0.25)
-var active_push_foot: String = ""
-var push_anim_time: float = 0.0
-var push_anim_duration: float = 0.25
-
 func _ready() -> void:
-	left_foot_rest = left_foot.position
-	right_foot_rest = right_foot.position
 	var exclude: Array[RID] = []
 	_probe = SurfaceProbe.new(get_world_3d().direct_space_state, exclude)
 	_measure_catch_cone()
-	_camera_yaw = rotation.y
-	_camera_target_yaw = rotation.y
-	_travel_heading = rotation.y
-	_camera_pos = global_position
-	_camera_boom_rest = camera_boom.position
 
 ## Resolves how far off-axis the deck may be at touchdown and still be caught. Two independent
 ## physical limits, whichever binds first:
@@ -438,90 +351,6 @@ func _apply_manual_pivot() -> void:
 			offset = Basis(Vector3.UP, board_pivot.rotation.y) * (p - Basis(Vector3.RIGHT, pitch) * p)
 	board_pivot.position = offset
 
-## Eases the chase camera's yaw toward the rig's, so a landing that jumps the rig's heading does not
-## jump the view with it. Deliberately smooths yaw ONLY: the pivot's baked pitch and offset are what
-## frame the shot, and it stays on SkaterRoot rather than BoardPivot so the view never rolls with a
-## ramp or spins with a trick.
-##
-## Chase camera: a spring arm orbiting the skater.
-##
-## THE INVARIANT: position and aim must come from the SAME smoothed yaw. Break it and the subject
-## leaves the frame. It was broken here once, and the failure is worth recording because it did not
-## look like a framing bug - it read as "the pan is too slow". CameraPivot used to CARRY the boom
-## offset, so it sat 2.1 m behind the skater and rotating it spun the camera on the spot, like
-## turning your head while standing still. Rig yaw was inherited rigidly, so on an imperfect landing
-## the camera's POSITION whipped round instantly while only its AIM was smoothed. Measured on a
-## 70 deg landing: the skater sat 60.8 deg off the centre of view - outside the frame entirely - and
-## took 1.2 s to come back. The boom now lives on Camera3D and this node orbits the rig origin, so
-## rotating it walks the camera AROUND the skater while it keeps facing them.
-##
-## The camera chases the DIRECTION OF TRAVEL, not the board's heading. Roll up a bank and back down
-## and gravity reverses your travel without touching rig yaw, so a board-following camera simply sat
-## there watching you come at it. Travel-following also gets fakie right for nothing: land a 180 and
-## your travel is unchanged, so the shot correctly does not move even though the board reversed.
-##
-## It also DELETED machinery rather than adding it. Board heading jumps at touchdown (the landing
-## residual is transferred into rig yaw), which is the sole reason a spring-damped "jump offset"
-## existed to absorb and return those jumps. Travel direction never jumps - it realigns at a bounded
-## rate through wheel grip - so the workaround is gone along with its cause.
-func _smooth_camera(delta: float) -> void:
-	# Heading of travel, held below a threshold: the heading of a near-zero vector is noise, and that
-	# is exactly the state at the top of a bank in the instant before a reversal.
-	var flat := Vector2(velocity.x, velocity.z)
-	if flat.length() > camera_travel_min_speed:
-		_travel_heading = atan2(-flat.x, -flat.y)
-
-	# Where the camera wants to sit: behind travel, orbited toward the rider's chosen side. A node
-	# at yaw t looks along (-sin t, -cos t), so "behind" is the opposite.
-	var behind := Vector2(sin(_travel_heading), cos(_travel_heading))
-	_camera_side_smooth = lerpf(_camera_side_smooth, float(input_state.camera_side),
-		minf(camera_side_switch_speed * delta, 1.0))
-	var side := Vector2(global_transform.basis.x.x, global_transform.basis.x.z)
-	var pos_dir := behind
-	var perp_dir := Vector2.ZERO
-	if side.length_squared() > 0.000001:
-		side = side.normalized()
-		# Only the part of the side vector lying ACROSS the view line can offset the camera. Taking
-		# the perpendicular component keeps this continuous: travelling exactly sideways, the offset
-		# fades smoothly to nothing and returns on the other side, where a sign test would flip and
-		# make the camera chatter on the boundary.
-		var perp: Vector2 = side - behind * side.dot(behind)
-		if perp.length() > 0.001:
-			perp_dir = perp.normalized()
-			# Both offsets scale by the SAME smoothed selection, so a switch eases the orbit and the
-			# slide in step and passes cleanly through centre instead of flipping sign.
-			pos_dir = (behind + perp_dir * tan(deg_to_rad(camera_side_offset_deg))
-				* _camera_side_smooth).normalized()
-	var desired: float = atan2(pos_dir.x, pos_dir.y)
-
-	# Rate-limit the goal, then smooth toward it. The limiter is what turns a reversal into a swing
-	# rather than a snap; the lerp rounds off the start and stop the limiter would otherwise leave.
-	var step: float = deg_to_rad(camera_max_swing_deg) * delta
-	_camera_target_yaw += clampf(angle_difference(_camera_target_yaw, desired), -step, step)
-	_camera_yaw = lerp_angle(_camera_yaw, _camera_target_yaw, minf(camera_follow_speed * delta, 1.0))
-	# CameraPivot is a child of SkaterRoot, so its world yaw is rotation.y plus its own local yaw.
-	# Solve for the local angle that lands it on the smoothed world yaw.
-	camera_pivot.rotation.y = angle_difference(rotation.y, _camera_yaw)
-
-	# Lateral slide, in the pivot's own frame - the visible half of the side view. Shifts the
-	# viewpoint without turning it, so the vanishing point stays centred and the skater sits
-	# off-centre instead of the world streaming diagonally.
-	#
-	# Projecting the side direction onto the pivot's local X gives a signed factor that is +/-1 in
-	# normal riding and eases through zero in the degenerate sideways case - the same continuity
-	# trick as the orbit term, avoiding a sign() that would flip on the boundary. Lerped rather than
-	# snapped so switching sides on the d-pad slides across instead of teleporting.
-	var pivot_x := Vector2(cos(_camera_yaw), -sin(_camera_yaw))
-	var lateral_target: float = camera_side_offset_m * _camera_side_smooth * perp_dir.dot(pivot_x)
-	_camera_lateral = lerpf(_camera_lateral, lateral_target, minf(camera_follow_speed * delta, 1.0))
-	camera_boom.position.x = _camera_boom_rest.x + _camera_lateral
-
-	# Follow position, velocity fed forward so constant-speed riding has zero lag and the authored
-	# framing is untouched. Only changes in motion make the camera fall behind.
-	_camera_pos += velocity * delta
-	_camera_pos = _camera_pos.lerp(global_position, minf(camera_position_damp * delta, 1.0))
-	camera_pivot.global_position = _camera_pos
-
 ## A push drives the board along its ROLLING AXIS, in whichever direction it is already rolling.
 ##
 ## Emphatically not along the current travel vector: drifting even slightly sideways, that would
@@ -618,137 +447,39 @@ func _blocked_by_wall(travel: Vector3) -> bool:
 	# Only near-vertical faces block; ramps and curb tops are handled by the ground probe.
 	return rad_to_deg(hit.normal.angle_to(Vector3.UP)) > max_surface_angle_deg
 
+## THE FRAME PIPELINE. Order is the design here, not an implementation detail.
+##
+## Each step is a named method so this reads as the sequence it is, but the sequence is the part
+## that matters: several steps write state a later one reads back, three of them write board_pivot's
+## pitch, and the comments at the call sites below record which orderings are load-bearing and why.
+## Reordering these lines is a behaviour change even though none of the methods themselves change.
+##
+## The two extracted nodes - foot_rig and camera_pivot - are advanced by explicit calls from here
+## rather than by their own _physics_process, precisely so they take part in this ordering instead
+## of being sequenced by node order in SkaterRig.tscn.
 func _physics_process(delta: float) -> void:
-	# 1. Grounded vs Airborne evaluation, measured against real geometry rather than a fixed plane.
-	#
-	# Proximity may only KEEP the skater grounded, never make them grounded. The airborne -> grounded
-	# transition belongs exclusively to the touchdown path in section 6, which is what zeroes
-	# vertical_velocity and runs _evaluate_touchdown_landing() (landing tolerances, bail checks,
-	# trick naming). Letting this block flip the flag on proximity skipped all of that whenever the
-	# skater entered the snap band gently - rolling off a low curb left v_speed stuck negative
-	# forever and never resolved the trick name.
-	#
-	# The old first clause here was `if vertical_velocity > 0.05: is_grounded = false`. It had to go
-	# once slopes went live: velocity is no longer purely horizontal in intent, and any test of world
-	# Y against zero misreads a skater rolling uphill as one leaving the ground. It was only ever a
-	# belt-and-braces guard - the pop in step 5 sets is_grounded = false explicitly, and nothing else
-	# can lift the skater off a surface - so removing it costs nothing.
-	surface_hit = _probe_surface()
-	if not surface_hit.valid:
-		is_grounded = false # Nothing underneath - rolled off a ledge, no special case needed.
-	elif is_grounded:
-		is_grounded = global_position.y - _surface_ride_y() <= ground_snap_distance
+	# 1. Where the skater is, and which way they are rolling.
+	_update_grounded_state()
+	_update_travel_axis_sign()
 
-	# Update persistent rolling direction along the board's axis above camera_travel_min_speed deadband
-	var flat_vel := Vector2(velocity.x, velocity.z)
-	if flat_vel.length() > camera_travel_min_speed:
-		var axis: Vector3 = _board_axis()
-		var along: float = Vector3(velocity.x, 0.0, velocity.z).dot(axis)
-		if absf(along) > 0.01:
-			_travel_axis_sign = 1.0 if along >= 0.0 else -1.0
-
-	# Synchronize all kinematic animations and stance updates to physics tick
-	_animate_ankle_pegs(delta)
-	_animate_foot_push_stroke(delta)
+	# Kinematic animation and stance facts, synchronised to the physics tick.
+	foot_rig.animate(delta, input_state, camera_pivot.rotation.y, board_pivot.rotation.y)
 	_apply_surface_alignment(delta)
-	# Pass SkaterRoot, not board_pivot: update_stance_facts() reads pivot.get_parent() for the
-	# stationary forward vector, and that parent is now the surface-tilted SurfaceAlign node.
-	# Horizontal velocity only. `velocity` now carries the ballistic vertical speed too, and during a
-	# pop that term dominates - passing it whole would point the travel vector nearly straight up and
-	# scramble the leading/trailing foot test for the whole flight.
-	input_state.update_stance_facts(board_pivot, left_foot, right_foot,
-		Vector3(velocity.x, 0.0, velocity.z), self, _travel_axis_sign)
-	
-	# 2. Push Acceleration Impulses via Face Buttons (latched inputs ensure zero missed taps)
-	if input_state.push_left_triggered or input_state.push_right_triggered:
-		if is_grounded:
-			_apply_push_impulse()
-			if input_state.push_left_triggered:
-				_start_foot_push("left")
-			else:
-				_start_foot_push("right")
-			input_state.push_left_triggered = false
-			input_state.push_right_triggered = false
-		elif vertical_velocity > 0.5 or (surface_hit.valid and global_position.y - _surface_ride_y() > 0.35):
-			# Clear stale latched presses if high in the air to prevent unintended touchdown bursts
-			input_state.push_left_triggered = false
-			input_state.push_right_triggered = false
-	
+	_update_stance_facts()
+
+	# 2. Push acceleration impulses from the face buttons.
+	_apply_push_inputs()
+
 	# 3. Ground dynamics: slope gravity, wheel grip and rolling friction in one pass.
 	if is_grounded:
 		_apply_ground_forces(delta)
-	
-	# 4. Steering & Stationary Rotation via Trigger Lean (RT - LT) on pavement
-	# Dampen steering by 80% while preparing pop to safely pre-wind aerial spin without swerving off line!
-	var turn_mult: float = 0.2 if input_state.current_pop_state != FootInputState.PopState.NONE else 1.0
-	var turn_rate: float = input_state.lean * (input_state.board_config.turn_speed if is_instance_valid(input_state.board_config) else 3.0) * turn_mult
-	if is_grounded and abs(input_state.lean) > 0.05:
-		rotate_y(-turn_rate * delta)
-	
-	# 5. Execute Vertical Pop Impulse & Setup 3-Layer Trick Rotations
-	if is_grounded and input_state.pop_impulse_triggered:
-		vertical_velocity = jump_impulse
-		is_grounded = false
-		input_state.pop_impulse_triggered = false
-		
-		if absf(input_state.pop_lateral_impulse_ratio) > 0.0:
-			var lateral_axis: Vector3 = global_transform.basis.x * _travel_axis_sign
-			lateral_axis.y = 0.0
-			velocity += lateral_axis.normalized() * (input_state.pop_lateral_impulse_ratio * max_lateral_pop_impulse)
-			board_pivot.rotation_degrees.y -= input_state.pop_lateral_impulse_ratio * lateral_pop_yaw_deg
-			input_state.pop_lateral_impulse_ratio = 0.0
-		
-		airborne_body_yaw_deg = 0.0
-		# Same idiom as deck_reversed below: read the orientation instead of inferring it.
-		pop_riding_reversed = cos(deg_to_rad(board_pivot.rotation_degrees.y)) < 0.0
-		var sig: TrickSignature = input_state.current_trick
 
-		# Initial kicktail pitch angle and flip roll sign upon popping (inverted in Switch/Fakie where Y == 180!)
-		var stance_sign: float = 1.0 if input_state.leading_foot == FootInputState.Foot.LEFT else -1.0
-		if sig.pop == TrickSignature.Pop.NOLLIE or sig.pop == TrickSignature.Pop.FAKIE_OLLIE:
-			board_pivot.rotation_degrees.x = -22.0 * stance_sign # Leading nose pop
-		else:
-			board_pivot.rotation_degrees.x = 22.0 * stance_sign # Trailing tail pop
+	# 4. Steering and stationary rotation, via trigger lean.
+	_apply_steering(delta)
 
-		# Where the deck actually was when the trick started, so touchdown can measure what it turned
-		# through rather than assuming it turned through whatever was requested here.
-		_pop_board_roll = board_mesh.rotation_degrees.z
-		_pop_board_yaw = board_mesh.rotation_degrees.y
+	# 5. Vertical pop impulse, and setup of the 3-layer trick rotations it starts.
+	_execute_pop()
 
-		# Configure BoardMesh flip & spin targets (Layer 3). Only the deck's own 180 deg yaw reversal
-		# after a Shove-it needs compensating here - Nollie/Fakie flip mirroring is already applied
-		# in FootInputState._build_trick_signature(), so there is no stance term.
-		#
-		# Targets are built off the nearest RESTING orientation, not off the raw current angle: popping
-		# again mid-settle would otherwise bake the few unsettled degrees in permanently, and every
-		# later trick would inherit the error. When the deck is already at rest - the normal case -
-		# rounding is a no-op and the target is unchanged.
-		var roll_rest: float = _nearest_multiple(board_mesh.rotation_degrees.z, 360.0)
-		var yaw_rest: float = _nearest_multiple(board_mesh.rotation_degrees.y, 180.0)
-		var deck_reversed: bool = cos(deg_to_rad(board_mesh.rotation_degrees.y)) < 0.0
-		var roll_sign: float = -1.0 if deck_reversed else 1.0
-		if sig.flip == TrickSignature.Flip.KICK:
-			target_board_roll = roll_rest + (360.0 * roll_sign)
-			is_flip_in_progress = true
-		elif sig.flip == TrickSignature.Flip.HEEL:
-			target_board_roll = roll_rest - (360.0 * roll_sign)
-			is_flip_in_progress = true
-		else:
-			target_board_roll = roll_rest
-
-		# Spin magnitude comes from the measured signature, never from the display name.
-		if sig.shuv_deg != 0:
-			var spin_deg: float = 360.0 if absi(sig.shuv_deg) == 360 else 180.0
-			target_board_yaw = yaw_rest + (spin_deg * input_state.last_scoop_sign)
-			is_flip_in_progress = true
-		else:
-			target_board_yaw = yaw_rest
-
-		# The flip loop now owns BoardMesh; any settle still running is superseded by it.
-		if is_flip_in_progress:
-			is_flip_settling = false
-		_impart_deck_rotation(sig)
-	
 	# 5b. Carry a late-caught deck the last few degrees onto its resting orientation.
 	#
 	# Deliberately BEFORE the flight block, not after it. Touchdown is resolved inside step 6, so a
@@ -757,63 +488,224 @@ func _physics_process(delta: float) -> void:
 	# frame after the catch, and the deck turns at exactly one rate at all times.
 	_advance_flip_settle(delta)
 
-	# 6. Apply Custom Gravity, Aerial Pitch Control, 3-Layer Flight Physics & Touchdown
+	# 6. Custom gravity, aerial pitch control, 3-layer flight physics and touchdown.
 	if not is_grounded:
-		vertical_velocity -= gravity_accel * delta
-		global_position.y += vertical_velocity * delta
-		
-		# Layer 1: Aerial Body & Deck Spin Authority (FS/BS 180s/360s via triggers with fluid momentum smoothing)
-		# Applied to board_pivot.y so rolling travel vector and chase camera stay fixed behind the skater!
-		var target_spin: float = input_state.lean * body_spin_speed_deg
-		current_aerial_spin_rate = lerpf(current_aerial_spin_rate, target_spin, 20.0 * delta)
-		if abs(current_aerial_spin_rate) > 0.1:
-			board_pivot.rotation_degrees.y -= current_aerial_spin_rate * delta
-			airborne_body_yaw_deg -= current_aerial_spin_rate * delta
-		
-		# Layer 2: Mid-Air Pitch Control (0.20 to 1.00 thumbsticks to angle nose/tail in air)
-		_apply_airborne_board_pitch(delta)
-		
-		# Layer 3: Deck Flip & Spin Authority on BoardMesh with Shoe Hover Catching.
-		# Rates were fixed at the pop and are simply integrated here; both axes were scaled to the
-		# same trick duration, so they arrive together on the same frame however they are combined.
-		if is_flip_in_progress:
-			board_mesh.rotation_degrees.z = move_toward(board_mesh.rotation_degrees.z, target_board_roll, absf(flip_roll_rate) * delta)
-			board_mesh.rotation_degrees.y = move_toward(board_mesh.rotation_degrees.y, target_board_yaw, absf(flip_yaw_rate) * delta)
+		_integrate_flight(delta)
 
-			# Elevate shoe boxes slightly above spinning deck (Y = 0.18m)
-			left_foot.position.y = lerpf(left_foot.position.y, 0.18, 16.0 * delta)
-			right_foot.position.y = lerpf(right_foot.position.y, 0.18, 16.0 * delta)
-			
-			# Catch trick cleanly when deck revolution completes (grip tape facing up)
-			if is_equal_approx(board_mesh.rotation_degrees.z, target_board_roll) and is_equal_approx(board_mesh.rotation_degrees.y, target_board_yaw):
-				is_flip_in_progress = false
-				board_mesh.rotation_degrees.z = fmod(board_mesh.rotation_degrees.z, 360.0)
-				board_mesh.rotation_degrees.y = fmod(board_mesh.rotation_degrees.y, 360.0)
-				input_state.trick_status_string = "Caught in mid-air!"
+	# 7. Position integration, blocked by vertical faces.
+	_integrate_position(delta)
+
+	# 8. Grounded board rotations and middle-zone manuals (only when on pavement).
+	if is_grounded:
+		_apply_grounded_board_pitch(delta)
+		# Overrides whatever the flip hover left behind, but must not fight the push stroke - which
+		# runs earlier in the frame and is the one animation allowed to move a grounded foot.
+		if not foot_rig.is_pushing:
+			foot_rig.settle()
+
+	# 8c. Let the suspension extend back out, then advance the camera.
+	#
+	# The camera MUST run here, after step 7 has integrated position: it feeds velocity forward and
+	# damps toward global_position, so advancing it earlier would frame where the skater was rather
+	# than where they now are.
+	_recover_landing_dip(delta)
+	camera_pivot.follow(delta)
+
+	# 9. Re-seat the board onto its contact axle. Runs last, after every writer of board_pivot pitch
+	# (the pop in step 5, airborne pitch in step 6, grounded manuals just above).
+	_apply_manual_pivot()
+
+## Step 1. Grounded vs airborne, measured against real geometry rather than a fixed plane.
+##
+## Proximity may only KEEP the skater grounded, never make them grounded. The airborne -> grounded
+## transition belongs exclusively to the touchdown path in step 6, which is what zeroes
+## vertical_velocity and runs _evaluate_touchdown_landing() (landing tolerances, bail checks,
+## trick naming). Letting this block flip the flag on proximity skipped all of that whenever the
+## skater entered the snap band gently - rolling off a low curb left v_speed stuck negative
+## forever and never resolved the trick name.
+##
+## The old first clause here was `if vertical_velocity > 0.05: is_grounded = false`. It had to go
+## once slopes went live: velocity is no longer purely horizontal in intent, and any test of world
+## Y against zero misreads a skater rolling uphill as one leaving the ground. It was only ever a
+## belt-and-braces guard - the pop in step 5 sets is_grounded = false explicitly, and nothing else
+## can lift the skater off a surface - so removing it costs nothing.
+func _update_grounded_state() -> void:
+	surface_hit = _probe_surface()
+	if not surface_hit.valid:
+		is_grounded = false # Nothing underneath - rolled off a ledge, no special case needed.
+	elif is_grounded:
+		is_grounded = global_position.y - _surface_ride_y() <= ground_snap_distance
+
+## Persistent rolling direction along the board's axis, held above the travel_min_speed deadband so
+## a skater stalling to a stop keeps the direction they were rolling rather than snapping to the
+## rig's static forward.
+func _update_travel_axis_sign() -> void:
+	var flat_vel := Vector2(velocity.x, velocity.z)
+	if flat_vel.length() <= travel_min_speed:
+		return
+	var axis: Vector3 = _board_axis()
+	var along: float = Vector3(velocity.x, 0.0, velocity.z).dot(axis)
+	if absf(along) > 0.01:
+		_travel_axis_sign = 1.0 if along >= 0.0 else -1.0
+
+## Hands FootInputState the geometry it needs to work out which foot is leading.
+##
+## Passes SkaterRoot, not board_pivot: update_stance_facts() reads pivot.get_parent() for the
+## stationary forward vector, and that parent is now the surface-tilted SurfaceAlign node.
+## Horizontal velocity only. `velocity` now carries the ballistic vertical speed too, and during a
+## pop that term dominates - passing it whole would point the travel vector nearly straight up and
+## scramble the leading/trailing foot test for the whole flight.
+func _update_stance_facts() -> void:
+	input_state.update_stance_facts(board_pivot, foot_rig.left_foot, foot_rig.right_foot,
+		Vector3(velocity.x, 0.0, velocity.z), self, _travel_axis_sign)
+
+## Step 2. Push impulses from the face buttons (latched inputs ensure zero missed taps).
+func _apply_push_inputs() -> void:
+	if not (input_state.push_left_triggered or input_state.push_right_triggered):
+		return
+	if is_grounded:
+		_apply_push_impulse()
+		if input_state.push_left_triggered:
+			foot_rig.start_push(FootInputState.Foot.LEFT)
 		else:
-			# Return shoe boxes to ride rest height when trick is caught or no flip active
-			left_foot.position.y = lerpf(left_foot.position.y, left_foot_rest.y, 16.0 * delta)
-			right_foot.position.y = lerpf(right_foot.position.y, right_foot_rest.y, 16.0 * delta)
-		
-		# Touchdown onto whatever surface the probe found - ground, curb top, ramp face.
-		if surface_hit.valid and global_position.y <= _surface_ride_y() and vertical_velocity <= 0.0:
-			# Sample the impact BEFORE it is zeroed - it is the only measure of how hard this landing
-			# was, and one line later it is gone.
-			var impact: float = absf(vertical_velocity)
-			global_position.y = _surface_ride_y()
-			vertical_velocity = 0.0
-			is_grounded = true
-			_since_touchdown = 0.0
-			_realigning = true
-			if landing_dip_ref_speed > 0.0:
-				_landing_dip = minf(impact / landing_dip_ref_speed, 1.0) * landing_dip_max
-			current_aerial_spin_rate = 0.0
-			input_state.current_pop_state = FootInputState.PopState.NONE
-			_evaluate_touchdown_landing()
-	
-	# 7. Position integration, blocked by vertical faces. `velocity` is authoritative and is NOT
-	# rebuilt from orientation here - that rebuild was the whole bug. Only the horizontal components
-	# move the skater; while grounded the surface snap just below owns height entirely.
+			foot_rig.start_push(FootInputState.Foot.RIGHT)
+		input_state.push_left_triggered = false
+		input_state.push_right_triggered = false
+	elif vertical_velocity > 0.5 or (surface_hit.valid and global_position.y - _surface_ride_y() > 0.35):
+		# Clear stale latched presses if high in the air to prevent unintended touchdown bursts
+		input_state.push_left_triggered = false
+		input_state.push_right_triggered = false
+
+## Step 4. Steering and stationary rotation via trigger lean (RT - LT), on pavement only.
+func _apply_steering(delta: float) -> void:
+	# Dampen steering by 80% while preparing pop to safely pre-wind aerial spin without swerving off line!
+	var turn_mult: float = 0.2 if input_state.current_pop_state != FootInputState.PopState.NONE else 1.0
+	var turn_rate: float = input_state.lean * (input_state.board_config.turn_speed if is_instance_valid(input_state.board_config) else 3.0) * turn_mult
+	if is_grounded and abs(input_state.lean) > 0.05:
+		rotate_y(-turn_rate * delta)
+
+## Step 5. The pop: vertical impulse, kicktail pitch, and the deck rotation targets for the trick.
+func _execute_pop() -> void:
+	if not (is_grounded and input_state.pop_impulse_triggered):
+		return
+	vertical_velocity = jump_impulse
+	is_grounded = false
+	input_state.pop_impulse_triggered = false
+
+	if absf(input_state.pop_lateral_impulse_ratio) > 0.0:
+		var lateral_axis: Vector3 = global_transform.basis.x * _travel_axis_sign
+		lateral_axis.y = 0.0
+		velocity += lateral_axis.normalized() * (input_state.pop_lateral_impulse_ratio * max_lateral_pop_impulse)
+		board_pivot.rotation_degrees.y -= input_state.pop_lateral_impulse_ratio * lateral_pop_yaw_deg
+		input_state.pop_lateral_impulse_ratio = 0.0
+
+	airborne_body_yaw_deg = 0.0
+	# Same idiom as deck_reversed below: read the orientation instead of inferring it.
+	pop_riding_reversed = cos(deg_to_rad(board_pivot.rotation_degrees.y)) < 0.0
+	var sig: TrickSignature = input_state.current_trick
+
+	# Initial kicktail pitch angle and flip roll sign upon popping (inverted in Switch/Fakie where Y == 180!)
+	var stance_sign: float = 1.0 if input_state.leading_foot == FootInputState.Foot.LEFT else -1.0
+	if sig.pop == TrickSignature.Pop.NOLLIE or sig.pop == TrickSignature.Pop.FAKIE_OLLIE:
+		board_pivot.rotation_degrees.x = -22.0 * stance_sign # Leading nose pop
+	else:
+		board_pivot.rotation_degrees.x = 22.0 * stance_sign # Trailing tail pop
+
+	# Where the deck actually was when the trick started, so touchdown can measure what it turned
+	# through rather than assuming it turned through whatever was requested here.
+	_pop_board_roll = board_mesh.rotation_degrees.z
+	_pop_board_yaw = board_mesh.rotation_degrees.y
+
+	# Configure BoardMesh flip & spin targets (Layer 3). Only the deck's own 180 deg yaw reversal
+	# after a Shove-it needs compensating here - Nollie/Fakie flip mirroring is already applied
+	# in FootInputState._build_trick_signature(), so there is no stance term.
+	#
+	# Targets are built off the nearest RESTING orientation, not off the raw current angle: popping
+	# again mid-settle would otherwise bake the few unsettled degrees in permanently, and every
+	# later trick would inherit the error. When the deck is already at rest - the normal case -
+	# rounding is a no-op and the target is unchanged.
+	var roll_rest: float = _nearest_multiple(board_mesh.rotation_degrees.z, 360.0)
+	var yaw_rest: float = _nearest_multiple(board_mesh.rotation_degrees.y, 180.0)
+	var deck_reversed: bool = cos(deg_to_rad(board_mesh.rotation_degrees.y)) < 0.0
+	var roll_sign: float = -1.0 if deck_reversed else 1.0
+	if sig.flip == TrickSignature.Flip.KICK:
+		target_board_roll = roll_rest + (360.0 * roll_sign)
+		is_flip_in_progress = true
+	elif sig.flip == TrickSignature.Flip.HEEL:
+		target_board_roll = roll_rest - (360.0 * roll_sign)
+		is_flip_in_progress = true
+	else:
+		target_board_roll = roll_rest
+
+	# Spin magnitude comes from the measured signature, never from the display name.
+	if sig.shuv_deg != 0:
+		var spin_deg: float = 360.0 if absi(sig.shuv_deg) == 360 else 180.0
+		target_board_yaw = yaw_rest + (spin_deg * input_state.last_scoop_sign)
+		is_flip_in_progress = true
+	else:
+		target_board_yaw = yaw_rest
+
+	# The flip loop now owns BoardMesh; any settle still running is superseded by it.
+	if is_flip_in_progress:
+		is_flip_settling = false
+	_impart_deck_rotation(sig)
+
+## Step 6. Flight: gravity, the three rotation layers, and the touchdown that ends it.
+func _integrate_flight(delta: float) -> void:
+	vertical_velocity -= gravity_accel * delta
+	global_position.y += vertical_velocity * delta
+
+	# Layer 1: Aerial Body & Deck Spin Authority (FS/BS 180s/360s via triggers with fluid momentum smoothing)
+	# Applied to board_pivot.y so rolling travel vector and chase camera stay fixed behind the skater!
+	var target_spin: float = input_state.lean * body_spin_speed_deg
+	current_aerial_spin_rate = lerpf(current_aerial_spin_rate, target_spin, 20.0 * delta)
+	if abs(current_aerial_spin_rate) > 0.1:
+		board_pivot.rotation_degrees.y -= current_aerial_spin_rate * delta
+		airborne_body_yaw_deg -= current_aerial_spin_rate * delta
+
+	# Layer 2: Mid-Air Pitch Control (0.20 to 1.00 thumbsticks to angle nose/tail in air)
+	_apply_airborne_board_pitch(delta)
+
+	# Layer 3: Deck Flip & Spin Authority on BoardMesh with Shoe Hover Catching.
+	# Rates were fixed at the pop and are simply integrated here; both axes were scaled to the
+	# same trick duration, so they arrive together on the same frame however they are combined.
+	if is_flip_in_progress:
+		board_mesh.rotation_degrees.z = move_toward(board_mesh.rotation_degrees.z, target_board_roll, absf(flip_roll_rate) * delta)
+		board_mesh.rotation_degrees.y = move_toward(board_mesh.rotation_degrees.y, target_board_yaw, absf(flip_yaw_rate) * delta)
+
+		# Elevate shoe boxes clear of the spinning deck
+		foot_rig.hover(delta)
+
+		# Catch trick cleanly when deck revolution completes (grip tape facing up)
+		if is_equal_approx(board_mesh.rotation_degrees.z, target_board_roll) and is_equal_approx(board_mesh.rotation_degrees.y, target_board_yaw):
+			is_flip_in_progress = false
+			board_mesh.rotation_degrees.z = fmod(board_mesh.rotation_degrees.z, 360.0)
+			board_mesh.rotation_degrees.y = fmod(board_mesh.rotation_degrees.y, 360.0)
+			input_state.trick_status_string = "Caught in mid-air!"
+	else:
+		# Return shoe boxes to ride rest height when trick is caught or no flip active
+		foot_rig.lower(delta)
+
+	# Touchdown onto whatever surface the probe found - ground, curb top, ramp face.
+	if surface_hit.valid and global_position.y <= _surface_ride_y() and vertical_velocity <= 0.0:
+		# Sample the impact BEFORE it is zeroed - it is the only measure of how hard this landing
+		# was, and one line later it is gone.
+		var impact: float = absf(vertical_velocity)
+		global_position.y = _surface_ride_y()
+		vertical_velocity = 0.0
+		is_grounded = true
+		_since_touchdown = 0.0
+		_realigning = true
+		if landing_dip_ref_speed > 0.0:
+			_landing_dip = minf(impact / landing_dip_ref_speed, 1.0) * landing_dip_max
+		current_aerial_spin_rate = 0.0
+		input_state.current_pop_state = FootInputState.PopState.NONE
+		_evaluate_touchdown_landing()
+
+## Step 7. Position integration, blocked by vertical faces. `velocity` is authoritative and is NOT
+## rebuilt from orientation here - that rebuild was the whole bug. Only the horizontal components
+## move the skater; while grounded the surface snap at the end owns height entirely.
+func _integrate_position(delta: float) -> void:
 	var travel: Vector3 = Vector3(velocity.x, 0.0, velocity.z) * delta
 	if _blocked_by_wall(travel):
 		# Scales rather than zeroing so wall_stop_damping keeps meaning "fraction of speed retained".
@@ -825,22 +717,12 @@ func _physics_process(delta: float) -> void:
 	# Ride the surface while grounded so curb tops and ramps are followed rather than fallen through.
 	if is_grounded and surface_hit.valid:
 		global_position.y = _surface_ride_y()
-	
-	# 8. Grounded Board Rotations & Middle-Zone Manuals (only when on pavement)
-	if is_grounded:
-		_apply_grounded_board_pitch(delta)
-		if active_push_foot == "":
-			left_foot.position = left_foot_rest
-			right_foot.position = right_foot_rest
 
-	# 8c. Let the suspension extend back out, and ease the camera toward the rig's heading.
+## Step 8c. Lets the landing suspension extend back out. Applied to SurfaceAlign.position, which
+## nothing else writes - see landing_dip_max for why that node and not the rig origin.
+func _recover_landing_dip(delta: float) -> void:
 	_landing_dip = lerpf(_landing_dip, 0.0, minf(landing_dip_recover * delta, 1.0))
 	surface_align.position.y = -_landing_dip
-	_smooth_camera(delta)
-
-	# 9. Re-seat the board onto its contact axle. Runs last, after every writer of board_pivot pitch
-	# (the pop in step 5, airborne pitch in step 6, grounded manuals just above).
-	_apply_manual_pivot()
 
 ## Nearest orientation in which the deck is at rest: griptape up for roll (multiples of 360), wheels
 ## running along the deck's long axis for yaw (multiples of 180, since a board rides either way).
@@ -954,8 +836,7 @@ func _finalise_trick_name() -> void:
 
 func _evaluate_touchdown_landing() -> void:
 	# Firmly seat shoes onto deck rest coordinates immediately upon ground contact
-	left_foot.position = left_foot_rest
-	right_foot.position = right_foot_rest
+	foot_rig.settle()
 	last_catch_error_deg = 0.0
 
 	# Primo / Incomplete Flip Check.
@@ -1083,56 +964,3 @@ func _apply_grounded_board_pitch(delta: float) -> void:
 		manual_timer = 0.0
 	
 	board_pivot.rotation_degrees.x = lerpf(board_pivot.rotation_degrees.x, target_pitch_deg, 16.0 * delta)
-
-func _start_foot_push(foot: String) -> void:
-	active_push_foot = foot
-	push_anim_time = 0.0
-
-func _animate_foot_push_stroke(delta: float) -> void:
-	if active_push_foot != "":
-		push_anim_time += delta
-		var progress: float = push_anim_time / push_anim_duration
-		if progress >= 1.0:
-			left_foot.position = left_foot_rest
-			right_foot.position = right_foot_rest
-			active_push_foot = ""
-		else:
-			# Sinusoidal dip toward the deck surface paired with a forward-to-backward sweeping thrust on Z
-			var vertical_dip: float = sin(progress * PI) * -0.055
-			var left_is_leading: bool = input_state.leading_foot == FootInputState.Foot.LEFT
-			var is_mongo_push: bool = (active_push_foot == "left" and left_is_leading) or (active_push_foot == "right" and not left_is_leading)
-			var lateral_dir: float = -1.0 if is_mongo_push else 1.0 # Mongo reaches to heel side (-X), Standard reaches to toe side (+X)
-			var lateral_reach: float = sin(progress * PI) * 0.22 * lateral_dir
-			var longitudinal_sweep: float = cos(progress * PI) * -0.15 # Reaches forward at start, thrusts backward at finish!
-			if active_push_foot == "left":
-				left_foot.position = left_foot_rest + Vector3(lateral_reach, vertical_dip, longitudinal_sweep)
-			else:
-				right_foot.position = right_foot_rest + Vector3(lateral_reach, vertical_dip, longitudinal_sweep)
-
-func _animate_ankle_pegs(delta: float) -> void:
-	# Each PegPivot hangs under BoardPivot, which yaws to 180 deg in Switch/Fakie while
-	# CameraPivot (parented to SkaterRoot) stays put. Driving the tilt directly in pivot-local
-	# degrees therefore mirrored the pegs in switch, so stick-down read as up and left as right.
-	# Rotating the stick vector out of screen space and into the pivot's frame keeps the pegs
-	# pointing the way the physical stick is actually pushed at ANY yaw, so they stay honest
-	# part-way through an aerial spin too, not just at 0 deg and 180 deg.
-	#
-	# Extended for direction reversals: when gravity reverses rolling direction and the chase camera
-	# swings 180 deg around SkaterRoot to track travel, camera_pivot.rotation.y changes by PI while
-	# board_pivot.rotation.y remains unaltered. We transform screen-space stick inputs using the relative
-	# angle between camera view and board yaw so pegs stay honest regardless of camera reversals.
-	var yaw: float = angle_difference(camera_pivot.rotation.y, board_pivot.rotation.y)
-	var yaw_cos: float = cos(yaw)
-	var yaw_sin: float = sin(yaw)
-	_drive_ankle_peg(left_peg_pivot, input_state.left_stick_raw, input_state.left_mag, yaw_cos, yaw_sin, delta)
-	_drive_ankle_peg(right_peg_pivot, input_state.right_stick_raw, input_state.right_mag, yaw_cos, yaw_sin, delta)
-
-func _drive_ankle_peg(pivot: Node3D, stick: Vector2, mag: float, yaw_cos: float, yaw_sin: float, delta: float) -> void:
-	if mag <= 0.05:
-		pivot.rotation = pivot.rotation.lerp(Vector3.ZERO, 16.0 * delta)
-		return
-	# Screen-space stick (x = right, y = toward the camera) resolved onto the pivot's local axes.
-	var local_x: float = stick.x * yaw_cos - stick.y * yaw_sin
-	var local_z: float = stick.x * yaw_sin + stick.y * yaw_cos
-	pivot.rotation_degrees.x = lerpf(pivot.rotation_degrees.x, local_z * peg_tilt_deg, 16.0 * delta)
-	pivot.rotation_degrees.z = lerpf(pivot.rotation_degrees.z, -local_x * peg_tilt_deg, 16.0 * delta)

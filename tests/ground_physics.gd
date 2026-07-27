@@ -74,10 +74,15 @@ const CASES := [
 		"expect_stopped": true},
 	{"label": "15 deg slope: rolls downhill", "slope": 15.0, "speed": 0.0, "settle": 120,
 		"expect_rolling": true},
+	# expect_swing_sign pins which SIDE of travel the camera settles on, not just how far off it is.
+	# Without it both cases assert only a magnitude, so a bug that ignored camera_side entirely left
+	# the left-view case silently reproducing the right-view result and still passing. That happened:
+	# extracting device polling made the poller overwrite camera_side every frame from its own
+	# default, which clobbered the value this harness sets.
 	{"label": "bank reversal, right view", "slope": 15.0, "speed": -2.0, "settle": 180,
-		"expect_reversal": true, "camera_side": 1},
+		"expect_reversal": true, "camera_side": 1, "expect_swing_sign": -1},
 	{"label": "bank reversal, left view", "slope": 15.0, "speed": -2.0, "settle": 180,
-		"expect_reversal": true, "camera_side": -1},
+		"expect_reversal": true, "camera_side": -1, "expect_swing_sign": 1},
 	{"label": "land 185 deg @ 7 m/s", "speed": 7.0, "land_yaw": 185.0,
 		"expect_landed": true, "expect_drift": 5.0},
 	{"label": "land 175 deg @ 7 m/s", "speed": 7.0, "land_yaw": 175.0,
@@ -278,7 +283,7 @@ func _travel_dir() -> float:
 ## at +/- camera_side_offset_deg, its sign telling you which side the camera has chosen.
 func _cam_vs_travel() -> float:
 	var v := Vector2(_skater.velocity.x, _skater.velocity.z)
-	if v.length() < _skater.camera_travel_min_speed:
+	if v.length() < _skater.travel_min_speed:
 		return 0.0
 	return rad_to_deg(angle_difference(atan2(-v.x, -v.y), deg_to_rad(_cam_yaw())))
 
@@ -347,14 +352,14 @@ func _finish_case() -> void:
 			problems.append("expected to stall and roll back down, never reversed")
 		# THE bank-reversal requirement: once genuinely rolling back down, the camera must have
 		# swung round to chase, not sat there watching the skater approach.
-		if absf(_cam_vs_travel()) > _skater.camera_side_offset_deg + 3.0:
+		if absf(_cam_vs_travel()) > _skater.camera_pivot.camera_side_offset_deg + 3.0:
 			problems.append("camera did not swing round to chase: %.1f deg off travel" % _cam_vs_travel())
 		# And it must have swung toward the side the offset selects, at a paced rate.
 		if c.has("expect_swing_sign") and signf(_cam_vs_travel()) != float(c["expect_swing_sign"]):
 			problems.append("camera settled on the wrong side: %+.1f deg" % _cam_vs_travel())
-		if _max_cam_step > _skater.camera_max_swing_deg / 60.0 + 0.3:
+		if _max_cam_step > _skater.camera_pivot.camera_max_swing_deg / 60.0 + 0.3:
 			problems.append("camera swung %.2f deg in one frame (limit %.2f)" % [
-				_max_cam_step, _skater.camera_max_swing_deg / 60.0])
+				_max_cam_step, _skater.camera_pivot.camera_max_swing_deg / 60.0])
 	elif c.get("expect_preserved_push", false):
 		detail = "final v_z %.2f m/s (%d pushes after stop)" % [_skater.velocity.z, _pushes]
 		if _pushes < 1:
@@ -385,14 +390,14 @@ func _finish_case() -> void:
 			# Rate limited: the camera may never swing faster than camera_max_swing_deg, whatever
 			# the provocation. Landings should barely move it at all now, since it tracks travel
 			# and travel does not jump at touchdown.
-			var cap: float = _skater.camera_max_swing_deg / 60.0 + 0.3
+			var cap: float = _skater.camera_pivot.camera_max_swing_deg / 60.0 + 0.3
 			if _max_cam_step > cap:
 				problems.append("camera moved %.2f deg in one frame (limit %.2f)" % [
 					_max_cam_step, cap])
 			# The camera settles behind TRAVEL, offset to the chosen side - not behind the rig.
-			if absf(_cam_vs_travel()) > _skater.camera_side_offset_deg + 2.0:
+			if absf(_cam_vs_travel()) > _skater.camera_pivot.camera_side_offset_deg + 2.0:
 				problems.append("camera settled %.1f deg off travel (expected ~%.0f)" % [
-					_cam_vs_travel(), _skater.camera_side_offset_deg])
+					_cam_vs_travel(), _skater.camera_pivot.camera_side_offset_deg])
 		if c.get("expect_bail", false) and not bailed:
 			problems.append("expected a wash-out, got \"%s\"" % _land_status)
 		if c.get("expect_landed", false):

@@ -1,9 +1,11 @@
-[gd_scene load_steps=12 format=3]
+[gd_scene load_steps=14 format=3]
 
 [ext_resource type="Script" path="res://scripts/player/SkaterController.gd" id="1_controller"]
 [ext_resource type="Script" path="res://scripts/input/FootInputState.gd" id="2_input"]
 [ext_resource type="Resource" path="res://resources/DefaultConfig.tres" id="3_config"]
 [ext_resource type="Script" path="res://scripts/player/SkateDeckMesh.gd" id="4_deck_mesh"]
+[ext_resource type="Script" path="res://scripts/player/ChaseCamera.gd" id="5_chase_camera"]
+[ext_resource type="Script" path="res://scripts/player/FootRig.gd" id="6_foot_rig"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_foot"]
 size = Vector3(0.231, 0.038, 0.098)
@@ -80,7 +82,11 @@ cast_shadow = 0
 mesh = SubResource("CylinderMesh_peg")
 surface_material_override/0 = SubResource("StandardMaterial3D_peg")
 
+[node name="FootRig" type="Node" parent="SurfaceAlign/BoardPivot"]
+script = ExtResource("6_foot_rig")
+
 [node name="CameraPivot" type="Node3D" parent="."]
+script = ExtResource("5_chase_camera")
 
 [node name="Camera3D" type="Camera3D" parent="CameraPivot"]
 transform = Transform3D(1, 0, 0, 0, 0.906308, 0.422618, 0, -0.422618, 0.906308, 0, 1.25, 2.1)

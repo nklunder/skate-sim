@@ -66,7 +66,9 @@ func _process(_delta: float) -> void:
 	left_stick_lbl.text = "Left Stick   | Mag: %.2f | Ang: %3.0f°" % [state.left_mag, rad_to_deg(state.left_angle)]
 	right_stick_lbl.text = "Right Stick | Mag: %.2f | Ang: %3.0f°" % [state.right_mag, rad_to_deg(state.right_angle)]
 	lean_lbl.text = "Trigger Spin (RT-LT): %.2f" % state.lean
-	button_lbl.text = "Button Pressed: %s" % state.current_button_string
+	# Polled here rather than in FootInputState: it is a debug label, so it is built by the debug
+	# view, at _process rate, instead of costing 64 Input queries on every physics tick.
+	button_lbl.text = "Button Pressed: %s" % JoyButtonNames.pressed_summary()
 	stance_lbl.text = "Static Config Stance: %s" % ("REGULAR" if state.stance == state.Stance.REGULAR else "GOOFY")
 	# The HUD is the only place foot identity becomes text; logic elsewhere compares enum values.
 	var lead_color: String = "#3399e6" if state.leading_foot == FootInputState.Foot.LEFT else "#e64d4d"
