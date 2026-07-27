@@ -2,9 +2,10 @@
 
 > **IMPORTANT INSTRUCTION FOR ALL AI AGENTS:**  
 > 1. **Read First:** At the beginning of any new chat session or when resuming work on this repository, you **MUST read this `AGENTS.md` file first** to synchronize your understanding of the architecture, design philosophy, and progress.  
-> 2. **Archival Reference:** For deep dives into past regressions or completed feature history, refer to:
+> 2. **Archival Reference & Feature Blueprints:** For deep dives into past regressions, milestones, or technical specs, refer to:
 >    - [docs/BUG_ARCHIVE.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/BUG_ARCHIVE.md) — Historical bug post-mortems and resolved physics regressions.
 >    - [docs/CHANGELOG_LEDGER.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/CHANGELOG_LEDGER.md) — Chronology of completed session tasks and feature implementations.
+>    - [docs/features/](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features) ([INDEX.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/INDEX.md)) — Feature engineering blueprints, requirements, and subsystem architectural references.
 > 3. **Auto-Update Protocol:** You **MUST automatically update this file** immediately whenever:
 >    - The user provides corrective feedback or refines game feel/rules.
 >    - Architectural or design decisions are established (e.g., via `/grill-me` interviews).
@@ -36,7 +37,9 @@
   - **Deadzone & Scaling:** Horizontal stick deflection (`stick.x`) has an inner deadzone ($|x| < 0.15$) for straight gap consistency, smoothly scaling out to 100% lateral velocity (`1.5 m/s`) at $|x| = 0.70$.
   - **Travel-Relative Mapping:** Joystick Left (`stick.x < 0`) always pops to the left of your travel line, and Joystick Right (`stick.x > 0`) pops to the right, consistent across Ollie, Nollie, Switch, and Fakie.
   - **Scoop Protection:** When an arc sweep ($\ge 40^\circ$) is detected for Pop Shove-its or 360 Flips, directional lateral impulse is automatically disabled to prevent unwanted sideways launches during scooping tricks.
+  - **Pressure-Scaled Manual Flick-Outs & Low-Pop Ledge Drops:** Any active manual balance ($0.20 \to 0.90$) permits initiating flicks or scoops without requiring full pop loading ($\ge 0.70$). Vertical velocity scales dynamically with trailing stick pressure via `pop_impulse_scale`: gentle manual holds ($0.20 \to 0.55$) yield a zero-to-low pop ($0\% \to 25\%$ impulse) for realistic un-popped ledge drops, while heavy compression ($\ge 0.70$) smoothly ramps to full pop impulse ($75\%$ manual pop-out). Grounded turning remains 100% untouched during gentle manual holds via `is_preparing_pop()` ($\ge 0.70$).
 - **Analog Trigger Body Rotation:** L and R trigger pulls spin the skater in mid-air. An **audio-log power taper curve ($y = \text{sign}(x) \cdot |x|^{2.2}$)** desensitizes light-to-mid squeezes for subtle styling adjustments while scaling exponentially to 100% spin velocity (`554 deg/s`) for explosive flat-ground 360s!
+
 
 ---
 
@@ -141,9 +144,9 @@
 
 > **Historical Bug Post-Mortems:** For details on solved issues (curb flip timers, desynchronized axes, HUD slide latches), see [docs/BUG_ARCHIVE.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/BUG_ARCHIVE.md).
 
-- ⚠️ **`_apply_airborne_board_pitch()` lacks an upper stick bound:** Airborne pitch uses `back.y > 0.15` without a ceiling, lerping to $24^\circ$ at full deflection. However, touchdown evaluation requires `back.y <= 0.90` for the manual zone. Holding sticks past `0.90` through touchdown falls out of the manual zone and triggers over-pitch bails.
 - ⚠️ **Rotation stops dead at catch without deceleration:** Airborne deck rotation axes halt immediately upon reaching targets without ease-out deceleration. Mathematically correct for foot arrest, but left open as an adjustable game-feel refinement.
 - ⚠️ **Ollie-to-manual Platform margin (`2 mm`):** Pop apex is `0.8022 m` against the `0.8 m` raised platform in `TestWorld.tscn`. Any downward tweak to `jump_impulse` or upward tweak to `gravity_accel` will make the platform unreachable and present as a regression.
+
 
 ---
 

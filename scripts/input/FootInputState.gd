@@ -57,6 +57,7 @@ var _poller := StickPoller.new()
 var current_pop_state: PopState = PopState.NONE
 var trick_status_string: String = "Grounded"
 var pop_impulse_triggered: bool = false
+var pop_impulse_scale: float = 1.0
 var pop_lateral_impulse_ratio: float = 0.0
 var last_pop_type: String = "None" # Display only. Logic reads current_trick.pop.
 var last_pop: TrickSignature.Pop = TrickSignature.Pop.OLLIE
@@ -140,16 +141,16 @@ func _detect_pop_load_and_flick() -> void:
 	
 	# Ollie / Switch Ollie Load (Trailing back foot pulled down in lower hemisphere)
 	if current_pop_state == PopState.NONE:
-		if back.length() >= 0.70 and back.y >= 0.50:
+		if back.length() >= 0.20 and back.y >= 0.20:
 			current_pop_state = PopState.LOADING_OLLIE
-			trick_status_string = "Loading Ollie (Tail)"
+			trick_status_string = "Loading Ollie (Tail)" if back.length() >= 0.70 else "Manual / Ledge Prep"
 			_last_frame_scoop_angle = rad_to_deg(back.angle())
 			accumulated_scoop_deg = 0.0
 			max_swept_angle = 0.0
 		# Nollie / Switch Nollie Load (Leading front foot pushed up in upper hemisphere)
-		elif front.length() >= 0.70 and front.y <= -0.50:
+		elif front.length() >= 0.20 and front.y <= -0.20:
 			current_pop_state = PopState.LOADING_NOLLIE
-			trick_status_string = "Loading Nollie (Nose)"
+			trick_status_string = "Loading Nollie (Nose)" if front.length() >= 0.70 else "Manual / Ledge Prep"
 			_last_frame_scoop_angle = rad_to_deg(front.angle())
 			accumulated_scoop_deg = 0.0
 			max_swept_angle = 0.0
@@ -171,6 +172,7 @@ func _detect_pop_load_and_flick() -> void:
 	# Execute Flick Pop from loaded states
 	if current_pop_state == PopState.LOADING_OLLIE and front.length() >= 0.35 and front.y <= 0.20:
 		pop_impulse_triggered = true
+		pop_impulse_scale = _calculate_pop_impulse_scale(back.length())
 		pop_lateral_impulse_ratio = _calculate_lateral_pop_ratio(back.x)
 		current_pop_state = PopState.POPPED
 		# Differentiate Switch vs Regular Ollie based on profile stance vs live orientation
@@ -181,6 +183,7 @@ func _detect_pop_load_and_flick() -> void:
 		_build_trick_signature()
 	elif current_pop_state == PopState.LOADING_NOLLIE and back.length() >= 0.35 and back.y >= -0.20:
 		pop_impulse_triggered = true
+		pop_impulse_scale = _calculate_pop_impulse_scale(front.length())
 		pop_lateral_impulse_ratio = _calculate_lateral_pop_ratio(front.x)
 		current_pop_state = PopState.POPPED
 		if (stance == Stance.REGULAR and not left_is_front) or (stance == Stance.GOOFY and left_is_front):
@@ -192,8 +195,24 @@ func _detect_pop_load_and_flick() -> void:
 	# Reset to None if sticks return to neutral without flicking
 	if right_stick_raw.length() < 0.20 and left_stick_raw.length() < 0.20 and current_pop_state != PopState.NONE:
 		current_pop_state = PopState.NONE
+		pop_impulse_scale = 1.0
 		max_swept_angle = 0.0
 		trick_status_string = "Grounded & Rolling"
+
+func _calculate_pop_impulse_scale(stick_mag: float) -> float:
+	# Gentle manual holds between 0.20 and 0.55 generate 0% to 25% impulse for ledge drops and low-pop flips!
+	if stick_mag < 0.55:
+		return clampf((stick_mag - 0.20) / (0.55 - 0.20) * 0.25, 0.0, 0.25)
+	# Deflections above 0.55 smoothly scale up to 100% full impulse at 0.70 and beyond!
+	return clampf(0.25 + (stick_mag - 0.55) / (0.70 - 0.55) * 0.75, 0.25, 1.0)
+
+## Returns true if the active stick is pulled down past the heavy pop load threshold (>= 0.70).
+func is_preparing_pop() -> bool:
+	if current_pop_state == PopState.LOADING_OLLIE:
+		return back_stick().length() >= 0.70
+	elif current_pop_state == PopState.LOADING_NOLLIE:
+		return front_stick().length() >= 0.70
+	return false
 
 func _calculate_lateral_pop_ratio(stick_x: float) -> float:
 	# Disable directional pop if scooping a Pop Shove-it or Tre Flip (arc sweep >= 40 deg)

@@ -584,7 +584,7 @@ func _apply_push_inputs() -> void:
 ## Step 4. Steering and stationary rotation via trigger lean (RT - LT), on pavement only.
 func _apply_steering(delta: float) -> void:
 	# Dampen steering by 80% while preparing pop to safely pre-wind aerial spin without swerving off line!
-	var turn_mult: float = 0.2 if input_state.current_pop_state != FootInputState.PopState.NONE else 1.0
+	var turn_mult: float = 0.2 if input_state.is_preparing_pop() else 1.0
 	var turn_rate: float = input_state.lean * (input_state.board_config.turn_speed if is_instance_valid(input_state.board_config) else 3.0) * turn_mult
 	if not is_grounded or abs(input_state.lean) <= 0.05:
 		_is_carve_latched = false
@@ -613,7 +613,7 @@ func _apply_steering(delta: float) -> void:
 func _execute_pop() -> void:
 	if not (is_grounded and input_state.pop_impulse_triggered):
 		return
-	vertical_velocity = jump_impulse
+	vertical_velocity = jump_impulse * input_state.pop_impulse_scale
 	is_grounded = false
 	input_state.pop_impulse_triggered = false
 
@@ -825,7 +825,7 @@ func _credit_achieved_rotation() -> void:
 			sig.flip = TrickSignature.Flip.NONE
 	if sig.shuv_deg != 0:
 		var achieved: int = absi(int(roundf((board_mesh.rotation_degrees.y - _pop_board_yaw) / 180.0)))
-		var intended: int = absi(sig.shuv_deg) / 180
+		var intended: int = int(absi(sig.shuv_deg) / 180.0)
 		if achieved < intended:
 			sig.shuv_deg = achieved * 180 * signi(sig.shuv_deg)
 
@@ -941,11 +941,11 @@ func _evaluate_touchdown_landing() -> void:
 	var front: Vector2 = input_state.front_stick()
 	var back: Vector2 = input_state.back_stick()
 
-	# Check if back or front stick is cleanly held within the expanded Manual Zone (0.20 to 0.90) upon touchdown
+	# Check if back or front stick is deflected (>= 0.20) upon touchdown, supporting heavy landings and scoops!
 	var effective_pitch: float = pitch if left_is_front else -pitch
-	if effective_pitch > 5.0 and back.y >= 0.20 and back.y <= 0.90:
+	if effective_pitch > 5.0 and (back.y >= 0.20 or (input_state.current_pop_state == FootInputState.PopState.LOADING_OLLIE and back.length() >= 0.20)):
 		in_manual_zone = true # Touchdown into standard / switch manual!
-	elif effective_pitch < -5.0 and front.y <= -0.20 and front.y >= -0.90:
+	elif effective_pitch < -5.0 and (front.y <= -0.20 or (input_state.current_pop_state == FootInputState.PopState.LOADING_NOLLIE and front.length() >= 0.20)):
 		in_manual_zone = true # Touchdown into nose / switch nose manual!
 	
 	if in_manual_zone:
@@ -972,12 +972,12 @@ func _apply_grounded_board_pitch(delta: float) -> void:
 	var back: Vector2 = input_state.back_stick()
 	var is_manualing: bool = false
 
-	# Manuals trigger in the expanded middle zone between 0.20 and 0.90 on whichever stick corresponds to leading/trailing edge!
-	if back.y > 0.20 and back.y <= 0.90:
-		target_pitch_deg = back.y * 24.0
+	# Manuals trigger whenever the trailing tail or leading nose stick is deflected (>= 0.20), supporting full radial scoops without dropping!
+	if back.y >= 0.20 or (input_state.current_pop_state == FootInputState.PopState.LOADING_OLLIE and back.length() >= 0.20):
+		target_pitch_deg = minf(1.0, back.length()) * 24.0
 		is_manualing = true
-	elif front.y < -0.20 and front.y >= -0.90:
-		target_pitch_deg = front.y * 24.0
+	elif front.y <= -0.20 or (input_state.current_pop_state == FootInputState.PopState.LOADING_NOLLIE and front.length() >= 0.20):
+		target_pitch_deg = -minf(1.0, front.length()) * 24.0
 		is_manualing = true
 		
 	# Automatically lift front trucks during Stationary Kickturns ONLY if not already balancing a thumbstick manual!
