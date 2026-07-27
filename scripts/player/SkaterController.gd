@@ -25,6 +25,8 @@ var surface_hit: SurfaceProbe.Hit = SurfaceProbe.Hit.new()
 @export_category("Manual & Pitch Tolerances")
 @export var manual_entry_delay: float = 0.08
 @export var max_landing_tolerance_deg: float = 15.0
+## Rider-relative pitch past which a touchdown counts as landing INTO a manual rather than flat.
+@export var manual_catch_min_pitch_deg: float = 5.0
 ## Deck pitch at full manual extension, and the ceiling airborne stick pitch works against.
 @export var max_pitch_deg: float = 24.0
 ## Kicktail angle snapped to at the instant of a pop.
@@ -1115,14 +1117,13 @@ func _evaluate_touchdown_landing() -> void:
 	var pitch: float = board_pivot.rotation_degrees.x
 	var in_manual_zone: bool = false
 	
-	var front: Vector2 = rider.front_stick()
-	var back: Vector2 = rider.back_stick()
-
-	# Check if back or front stick is deflected (>= 0.20) upon touchdown, supporting heavy landings and scoops!
+	# Landing INTO a manual: the deck is already pitched that way and the rider is still asking for
+	# it. Uses the same balance test as grounded pitch, so a manual cannot be caught on touchdown
+	# under rules the very next frame disagrees with.
 	var effective_pitch: float = rider_pitch_deg()
-	if effective_pitch > 5.0 and (back.y >= 0.20 or (trick.current_pop_state == TrickState.PopState.LOADING_OLLIE and back.length() >= 0.20)):
+	if effective_pitch > manual_catch_min_pitch_deg and trick.holds_tail_balance():
 		in_manual_zone = true # Touchdown into standard / switch manual!
-	elif effective_pitch < -5.0 and (front.y <= -0.20 or (trick.current_pop_state == TrickState.PopState.LOADING_NOLLIE and front.length() >= 0.20)):
+	elif effective_pitch < -manual_catch_min_pitch_deg and trick.holds_nose_balance():
 		in_manual_zone = true # Touchdown into nose / switch nose manual!
 	
 	if in_manual_zone:
@@ -1152,13 +1153,15 @@ func _apply_grounded_board_pitch(delta: float) -> void:
 
 	var was_manualing: bool = manual_timer >= manual_entry_delay or abs(board_pivot.rotation_degrees.x) > 2.0
 
-	# Flatground Manual Entry requires interior balance zone (0.20 to 0.90 vector length) and no active scoop arc (max_swept_angle < 10.0), ensuring outer-rim Shove-it and Varial scoops never lift the nose!
-	# Once an active manual is established, ANY trailing/leading stick load (>= 0.20) latches balance so scoops and heavy pops out of manuals don't drop!
-	var no_scoop: bool = trick.max_swept_angle < 10.0
-	if (not was_manualing and back.y > 0.20 and back.length() <= 0.90 and no_scoop) or (was_manualing and (back.y >= 0.20 or (trick.current_pop_state == TrickState.PopState.LOADING_OLLIE and back.length() >= 0.20))):
+	# The two-stage balance law - entering a manual from four wheels demands more than holding one
+	# already established. Both stages live on TrickState so this and the touchdown check cannot
+	# drift apart about what a manual is; see the comment there for why each stage tests what it does.
+	var tail_down: bool = trick.holds_tail_balance() if was_manualing else trick.enters_tail_balance()
+	var nose_down: bool = trick.holds_nose_balance() if was_manualing else trick.enters_nose_balance()
+	if tail_down:
 		target_pitch_deg = minf(1.0, back.length()) * max_pitch_deg
 		is_manualing = true
-	elif (not was_manualing and front.y < -0.20 and front.length() <= 0.90 and no_scoop) or (was_manualing and (front.y <= -0.20 or (trick.current_pop_state == TrickState.PopState.LOADING_NOLLIE and front.length() >= 0.20))):
+	elif nose_down:
 		target_pitch_deg = -minf(1.0, front.length()) * max_pitch_deg
 		is_manualing = true
 		

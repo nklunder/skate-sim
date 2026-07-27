@@ -33,6 +33,11 @@ enum PopState { NONE, LOADING_OLLIE, LOADING_NOLLIE, POPPED }
 ## Vertical band the releasing stick must be inside, so a flick reads as a flick and not as the
 ## opposite end being loaded instead.
 @export_range(0.0, 0.5) var flick_release_band: float = 0.20
+## Upper bound on deflection for ENTERING a manual from four wheels. Full compression past this is
+## an Ollie load, not a balance request - see the two-stage law on holds_*_balance() below.
+@export_range(0.5, 1.0) var manual_entry_max: float = 0.90
+## Sweep below which no scoop is considered active, for the manual-entry test.
+@export var scoop_idle_deg: float = 10.0
 
 @export_category("Shove-it Scoop Thresholds")
 @export var shuv_180_threshold_deg: float = 40.0 # Standard scoop buffer window (40° to 94°)
@@ -186,6 +191,40 @@ func _calculate_pop_impulse_scale(stick_mag: float) -> float:
 	var upper: float = maxf(pop_load_threshold - low_pop_knee, 0.001)
 	return clampf(low_pop_max_ratio + (stick_mag - low_pop_knee) / upper * (1.0 - low_pop_max_ratio),
 		low_pop_max_ratio, 1.0)
+
+## THE TWO-STAGE BALANCE LAW. Both stages live here so the two callers cannot drift apart.
+##
+## Grounded pitch and touchdown classification both need to ask "is the rider balancing this end
+## down?", and they used to answer it with the same compound expression written out twice. The
+## expression is not obvious - it is the fix for BUG_ARCHIVE #5 - so two copies was one edit away
+## from them disagreeing about what a manual is.
+##
+## Stage 1 (ENTER, from four wheels) demands mid-zone precision and no active scoop. Both matter:
+## sweeping the stick around the rim for a shove-it drops Cartesian y while the magnitude stays
+## high, and full compression past manual_entry_max is an Ollie load, not a request to lift the nose.
+##
+## Stage 2 (HOLD, already balancing) switches to polar magnitude during a pop load, so a full
+## circular scoop or a deep pop deflection out of an established manual does not drop it.
+func enters_tail_balance() -> bool:
+	var back: Vector2 = rider.back_stick()
+	return back.y > manual_zone_min and back.length() <= manual_entry_max and _no_active_scoop()
+
+func enters_nose_balance() -> bool:
+	var front: Vector2 = rider.front_stick()
+	return front.y < -manual_zone_min and front.length() <= manual_entry_max and _no_active_scoop()
+
+func holds_tail_balance() -> bool:
+	var back: Vector2 = rider.back_stick()
+	return back.y >= manual_zone_min \
+		or (current_pop_state == PopState.LOADING_OLLIE and back.length() >= manual_zone_min)
+
+func holds_nose_balance() -> bool:
+	var front: Vector2 = rider.front_stick()
+	return front.y <= -manual_zone_min \
+		or (current_pop_state == PopState.LOADING_NOLLIE and front.length() >= manual_zone_min)
+
+func _no_active_scoop() -> bool:
+	return max_swept_angle < scoop_idle_deg
 
 ## True while the active stick is loaded past the heavy pop threshold. Gates steering damping and,
 ## once the foot animations land, the pre-pop crouch - so a gentle manual hold leaves both alone.
