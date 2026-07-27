@@ -22,18 +22,19 @@ Every foot motion in this document is expressed in **LEADING / TRAILING** terms 
 
 - **Which foot moves, and in which direction** → always leading/trailing (`input_state.leading_foot` / `trailing_foot`).
 - **How far it may travel before running off the end** → nose/tail (`left_foot_over` / `right_foot_over`), because real decks are asymmetric in length and kick. This is the *only* thing nose/tail is for.
-- Axis convention: in `BoardPivot` local space the **leading edge is $-Z$**, the trailing edge $+Z$. Derive the sign from the flicking foot's rest offset rather than hardcoding it.
+- **Never hardcode the axis sign.** Which local $Z$ end leads depends on stance *and* travel — it flips when you roll backwards down a bank without the board moving at all. Use `SkaterController.leading_axle_z()` / `trailing_axle_z()`, and `stance_sign()` for pitch. See critical rule 1 in `AGENTS.md`.
 
 #### Stage A: The Slide & Pocket Flick (0% to 35% Jump Ascent)
 - Roles are assigned by which stick loaded the pop, never by board geometry:
   - **Ollie / Switch Ollie** (trailing stick loaded): the **trailing** foot is the popping foot and drives the **trailing** edge down; the **leading** foot is the flicking foot and slides **forward toward the leading edge**.
   - **Nollie / Fakie Ollie** (leading stick loaded): the **leading** foot is the popping foot and drives the **leading** edge down; the **trailing** foot is the flicking foot and slides **back toward the trailing edge**.
-  - Invariant: *the flicking foot always travels toward the edge opposite the popping foot.*
+  - Invariant: *the flicking foot always travels toward the edge opposite the popping foot.* ✅ **Confirmed 2026-07-27.**
 - Immediately upon jump release (`_execute_pop`), the popping foot lifts straight upward off its edge into the hover plane while the flicking foot slides along the griptape toward the far pocket.
 - Upon reaching that pocket, it executes a high-speed diagonal flick extension driven by `TrickSignature.flip` and measured diagonal stick inputs (`flick_tilt_deg` / boned vs. rocketed angles):
   - **Kickflip Outward Sweep:** Shoe thrusts diagonally outward away from the rider's body plane ($\pm X$ depending on stance handedness, combined with progression toward the flicking foot's own edge) while angling the ankle toe-up by $\approx 15^\circ$.
   - **Heelflip Inward Sweep:** Shoe kicks straight inward across the heel rail in front of the rider's toes with a flat-soled horizontal thrust.
-- **Timing Invariant & Flick Speed Scaling:** Stage A uses a **Hybrid Velocity Model** with a calibrated reference floor guaranteed to finish within the initial $30\% \to 45\%$ of jump ascent so shoe boxes clear the deck before griptape completes its first half-rotation. Analog stick deflection speed additively boosts flick velocity, rewarding explosive thumbstick snaps with snappy foot extensions!
+- **Timing & Flick Speed Scaling (resolved 2026-07-27):** Stage A runs on an exported **fixed duration** scaled by the measured stick flick speed (`TrickSignature.flick_speed`, already plumbed through `StickPoller`), *not* on a percentage of jump ascent. Ascent fraction is undefined for the low- and no-pop ledge drops that `pop_impulse_scale` now permits — a $0.0$ impulse has no ascent to take a percentage of, and those are exactly the flips that most need to read.
+  - The same measurement is intended to drive `flip_speed_deg` later, so a hard flick spins the deck faster. Because both scale off **one** number, the "shoe must clear the deck before its first half-rotation" constraint holds at every intensity without a separately calibrated floor speed on each.
 
 #### Stage B: Hover Recovery & Catch Standby (45% to Catch)
 - After reaching peak flick extension, the flicking shoe smoothly retracts horizontally back over the deck into the hover plane ($Y = 0.18\text{m}$), anchoring directly above its own rest offset (captured per-foot in `FootRig.Channel.rest_position`) in readiness for mid-air deck capture.
@@ -83,6 +84,11 @@ When a trick signature includes horizontal yaw rotation (`sig.shuv_deg != 0`):
    - **Nose/Tail is a board attribute, not a rider one.** A landed shove-it puts the tail at the leading end without the rider moving. Any animation that targets "the nose pocket" must resolve which physical end that is via `left_foot_over` / `right_foot_over` (rest offset XOR `deck_reversed`), not by assuming $-Z$ is the nose. This matters because real decks are asymmetric in length and kick.
 7. **Normalized Parameter Mapping (Feel Tuning Modularity):** To support endless real-time "feel" tuning without code modifications, all thumbstick deflections ($0.20$, $0.70$, $0.90$) and impulse percentages MUST be derived from exported top-level variables (`manual_zone_min`, `manual_zone_max`, `pop_load_threshold`, `manual_pop_ratio`). All foot compression and low-pop scaling curves must evaluate against normalized ratios across these configured boundaries rather than hardcoded literals.
 
+
+---
+
+## 👟 Riding Rest Pose
+Both shoes rest on the **axle line** (`Z = \pm 0.225`, matching `manual_axle_z`) — the rider stands over the bolts, directly above the trucks. Captured from `SkaterRig.tscn` into `FootRig.Channel.rest_position`; every animation below is a displacement *from* that pose, so nothing needs to re-author it. Shifts out toward the leading or trailing edge during trick setup are animated, not authored.
 
 ---
 

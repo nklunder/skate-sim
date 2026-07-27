@@ -46,7 +46,7 @@ board_config = ExtResource("3_config")
 script = ExtResource("4_deck_mesh")
 
 [node name="LeftFoot" type="Node3D" parent="SurfaceAlign/BoardPivot"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.025, 0.055, -0.25)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.025, 0.055, -0.225)
 script = ExtResource("7_shoe_mesh")
 is_left_shoe = true
 tint_color = Color(0.3, 0.6, 1, 1)
@@ -61,7 +61,7 @@ mesh = SubResource("CylinderMesh_peg")
 surface_material_override/0 = SubResource("StandardMaterial3D_peg")
 
 [node name="RightFoot" type="Node3D" parent="SurfaceAlign/BoardPivot"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.025, 0.055, 0.25)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.025, 0.055, 0.225)
 script = ExtResource("7_shoe_mesh")
 is_left_shoe = false
 tint_color = Color(1, 0.35, 0.35, 1)
