@@ -1,0 +1,117 @@
+# 🧹 CLEANUP.md — Known Debt, Deferred Work & Latent Traps
+
+Things a working session **noticed but deliberately did not do**, recorded so they are not rediscovered from scratch later. Every entry states what it is, *why it was left*, and what "done" looks like.
+
+> **Instruction for AI agents:** Read this before proposing a refactor — an item here may already have a decided approach, or may be deliberately open pending a design call from the user. When you complete one, delete its entry and log it in [CHANGELOG_LEDGER.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/CHANGELOG_LEDGER.md). **Do not treat this list as a work queue to burn down** — several items are here precisely because doing them without a reason would be churn.
+
+**Legend:** 🔨 ready to do · ❓ blocked on a design decision · 🕳️ latent trap, no action yet · 🧊 intentionally frozen
+
+---
+
+## 🔨 1. `_evaluate_touchdown_landing()` does five things in 106 lines
+
+`res://scripts/player/SkaterController.gd`
+
+The longest function in the project. In order, it: settles the feet, judges the deck catch against `catch_cone_deg`, transfers residual yaw from `BoardPivot` to the rig, tests for a sideways wash-out, and classifies the landing (manual / bail / clean).
+
+**Why left:** the seams are clean and the extraction is mechanical, but it is a judgment call rather than an obvious win, and it was proposed at the end of a session that had already produced two mishaps. Not worth stacking more churn onto tired verification.
+
+**Done looks like:** `_judge_deck_catch() -> bool` and `_classify_landing()` extracted, with the fall-through between the catch check and the manual check preserved. **That fall-through is load-bearing** — an early `return` there is what once made an incomplete flip present as "manuals don't work after a flip trick" rather than as a failed landing (BUG_ARCHIVE #1). Verify with all three suites reproducing every figure exactly.
+
+---
+
+## ❓ 2. Push impulse fires on every press while the animation is gated
+
+`_apply_push_inputs()` in `SkaterController.gd`, `FootRig.start_push()`
+
+`FootRig.start_push()` refuses while either foot is off its rest pose, so a press arriving mid-stroke is dropped. The **physical impulse is applied regardless**. Mashing the push button therefore accelerates at full rate while the shoe visibly kicks only once.
+
+**Why left:** the obvious fix — gate the impulse on the animation — is exactly the animation-decides-a-gameplay-outcome coupling this codebase has removed everywhere else (see AGENTS.md critical rule 9). The correct shape is a **physics-side** cooldown that the animation happens to match, not an animation vetoing physics. `_since_push` already exists as the timer; the change is roughly one line.
+
+**Blocked on:** whether pushing *should* be rate-limited at all, and at what cadence. That is a feel decision, not an engineering one. **Ask before implementing.**
+
+---
+
+## 🕳️ 3. The controller reads input polled one frame earlier
+
+Godot runs `_physics_process` in **tree order, parents before children**. `SkaterController` is on `SkaterRoot`; `RiderInput` and `TrickState` are its descendants:
+
+```
+SkaterRoot        (SkaterController)   ← ticks FIRST
+└── RiderInput                          ← polls the device SECOND
+    └── TrickState                      ← recognises gestures THIRD
+```
+
+So every frame the controller acts on stick values sampled on the **previous** frame — about 16.7 ms of input latency at 60 Hz.
+
+**Why left:** it is pre-existing behaviour that predates the input split, all current tuning was done against it, and both regression suites bake it in. Removing it would change every printed figure, so it cannot be verified as a no-op refactor — it is a deliberate feel change that needs playing.
+
+**If it is ever addressed:** the fix is to drive `RiderInput.tick()` / `TrickState.tick()` explicitly from the top of `SkaterController._physics_process()`, the same pattern `ChaseCamera.follow()` and `FootRig.solve()` already use, rather than reordering nodes. Expect every suite number to move; re-baseline deliberately.
+
+*(Related and much smaller: `FootRig.solve()` runs before `camera_pivot.follow()`, so the ankle pegs resolve against last frame's camera yaw. This is **preserved on purpose** — it is what the pegs always did, and changing it would alter their feel for no stated reason.)*
+
+---
+
+## 🕳️ 4. The foot rotation spring does not wrap angles
+
+`FootRig.Channel.integrate()`:
+
+```gdscript
+_vel_rotation += ((target_rotation - node.rotation) * stiffness - _vel_rotation * damping) * delta
+```
+
+A plain componentwise `Vector3` subtraction with no `angle_difference()`. Harmless today — every rotation target is currently the rest pose — and fine for the small angles `01_FOOT_ANIMATIONS.md` calls for (ankle toe-up ≈ 15°, crouch +5° to +10°).
+
+**The trap:** any foot rotation target approaching ±180° would spin the long way round, or oscillate. Most likely to bite on a future grind or a full-body trick where a shoe is authored near a half-turn.
+
+**Done looks like:** wrapping each component through `angle_difference()` before applying stiffness — but only when a target genuinely needs the range. Doing it pre-emptively costs three trig calls per foot per frame for no current benefit.
+
+---
+
+## 🔨 5. `FootRig` has no test coverage
+
+The largest animation surface in the project, and the upcoming work (`01_FOOT_ANIMATIONS.md`) is entirely mirror-sensitive. `BUG_ARCHIVE #4` records that switch/fakie mirror errors are **this project's recurring bug class**, and that they are found by *play*, never by tests, because they fail as a silent mirror image rather than a crash.
+
+**Done looks like:** `tests/foot_rig.tscn` asserting the invariants that can regress silently, across all four of `{regular, goofy} × {forward, switch}`:
+- both feet never leave the deck simultaneously while grounded
+- stance classification stays stable through a complete trick
+- poses converge to rest within N frames of touchdown
+- no NaN reaches a foot transform
+- flick X-sign mirrors correctly between stances
+
+**Why left:** deferred until there are animations worth asserting. Write it *alongside* the first real animation, not before.
+
+---
+
+## 🧊 6. Deliberately dead code — do not "clean up"
+
+| Symbol | Status |
+|---|---|
+| `SurfaceProbe.find_edge_near()` | Uncalled. Spline-free ledge discovery, written as Stage 1 groundwork for the grind system ([02_GRIND_SYSTEM.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/02_GRIND_SYSTEM.md)). **Keep.** |
+| `SurfaceProbe._exclude` | Always empty — the rig is a plain `Node3D` with no physics body, so there is nothing of its own to hit. Kept for when that changes. |
+| `TrickSignature.lands_switch` / `body_with_shuv` | Unused by any `TrickNames.TABLE` row today, but part of the naming API — they exist so rows *can* match on them. **Keep.** |
+| `SkateBoardConfig` — 8 of 9 fields | Only `turn_speed` is read. Already flagged honestly in the file's own header. Either wire them up or delete them when hardware customisation ([06](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/06_MODULAR_HARDWARE_CUSTOMIZATION.md)) is designed — **not before**, since that feature will decide their shape. |
+
+---
+
+## 🕳️ 7. The catch cone is measured once, at `_ready()`
+
+`_measure_catch_cone()` derives `catch_cone_deg` from `SkateDeckMesh.deck_extents()` — deck half-width and underside height — a single time on startup.
+
+That is correct today because the deck never changes. **Modular hardware customisation ([06](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/06_MODULAR_HARDWARE_CUSTOMIZATION.md)) breaks it**: swapping to a wider deck lowers the roll angle at which a rail strikes the ground, and the cone must move with it or landings will be judged against the previous board's geometry.
+
+**Done looks like:** `_measure_catch_cone()` re-invoked whenever the deck model changes. The function is already idempotent and reads everything it needs from the mesh, so this is a call site, not a rewrite.
+
+---
+
+## 📋 Recently cleared
+
+Kept briefly so a returning agent can see these are **already done** and does not re-propose them:
+
+- Seven ad-hoc orientation sign derivations → one conversion layer (`94f5974`)
+- `FootInputState` split into `RiderInput` / `TrickState` (`9412985`)
+- Two-stage balance law given one home on `TrickState` (`2a5b4a7`)
+- `max_push_speed` clamping the along-axis component instead of total speed (`e04cb31`)
+- Stale `pop_impulse_scale` on the keyboard pop path (`e04cb31`)
+- Dead: `_since_touchdown`, `SurfaceProbe.set_space()`, `last_pop_type`, `active_flip` as a field (`e04cb31`)
+- ~15 magic thresholds exported across `TrickState` and `SkaterController`

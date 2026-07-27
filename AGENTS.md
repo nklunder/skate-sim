@@ -5,6 +5,7 @@
 > 2. **Archival Reference & Feature Blueprints:** For deep dives into past regressions, milestones, or technical specs, refer to:
 >    - [docs/BUG_ARCHIVE.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/BUG_ARCHIVE.md) — Historical bug post-mortems and resolved physics regressions.
 >    - [docs/CHANGELOG_LEDGER.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/CHANGELOG_LEDGER.md) — Chronology of completed session tasks and feature implementations.
+>    - [docs/CLEANUP.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/CLEANUP.md) — Known debt, deferred work, and latent traps. **Read before proposing any refactor**: an item may already have a decided approach, be blocked on a user decision, or be deliberately frozen. It is not a work queue to burn down.
 >    - [docs/features/](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features) ([INDEX.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/INDEX.md)) — Feature engineering blueprints, requirements, and subsystem architectural references.
 > 3. **Auto-Update Protocol:** You **MUST automatically update this file** immediately whenever:
 >    - The user provides corrective feedback or refines game feel/rules.
