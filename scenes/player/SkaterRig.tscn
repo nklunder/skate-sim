@@ -24,9 +24,9 @@ albedo_color = Color(0.2, 0.6, 0.9, 1)
 albedo_color = Color(0.9, 0.3, 0.3, 1)
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_peg"]
-top_radius = 0.018
-bottom_radius = 0.018
-height = 0.15
+top_radius = 0.015
+bottom_radius = 0.015
+height = 0.12
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_peg"]
 albedo_color = Color(0.95, 0.95, 0.15, 1)
@@ -50,31 +50,31 @@ script = ExtResource("8_trick")
 script = ExtResource("4_deck_mesh")
 
 [node name="LeftFoot" type="Node3D" parent="SurfaceAlign/BoardPivot"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.025, 0.055, -0.225)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.025, 0.0155, -0.225)
 script = ExtResource("7_shoe_mesh")
 is_left_shoe = true
 tint_color = Color(0.3, 0.6, 1, 1)
 
 [node name="PegPivot" type="Node3D" parent="SurfaceAlign/BoardPivot/LeftFoot"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.075, 0.019, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.05, 0.019, -0.003)
 
 [node name="AnklePeg" type="MeshInstance3D" parent="SurfaceAlign/BoardPivot/LeftFoot/PegPivot"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.075, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.06, 0)
 cast_shadow = 0
 mesh = SubResource("CylinderMesh_peg")
 surface_material_override/0 = SubResource("StandardMaterial3D_peg")
 
 [node name="RightFoot" type="Node3D" parent="SurfaceAlign/BoardPivot"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.025, 0.055, 0.225)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.025, 0.0155, 0.225)
 script = ExtResource("7_shoe_mesh")
 is_left_shoe = false
 tint_color = Color(1, 0.35, 0.35, 1)
 
 [node name="PegPivot" type="Node3D" parent="SurfaceAlign/BoardPivot/RightFoot"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.075, 0.019, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.05, 0.019, 0.003)
 
 [node name="AnklePeg" type="MeshInstance3D" parent="SurfaceAlign/BoardPivot/RightFoot/PegPivot"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.075, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.06, 0)
 cast_shadow = 0
 mesh = SubResource("CylinderMesh_peg")
 surface_material_override/0 = SubResource("StandardMaterial3D_peg")
@@ -86,5 +86,5 @@ script = ExtResource("6_foot_rig")
 script = ExtResource("5_chase_camera")
 
 [node name="Camera3D" type="Camera3D" parent="CameraPivot"]
-transform = Transform3D(1, 0, 0, 0, 0.906308, 0.422618, 0, -0.422618, 0.906308, 0, 1.25, 2.1)
+transform = Transform3D(1, 0, 0, 0, 0.930418, 0.366501, 0, -0.366501, 0.930418, 0, 1.05, 1.8)
 current = true

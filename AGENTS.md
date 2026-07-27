@@ -118,7 +118,7 @@
 
 ### 3. `res://scripts/player/SkateDeckMesh.gd` & Deck Shaders
 - Extends `Node3D` and preloads standalone asset `res://assets/models/decks/skateboard.glb`.
-- Applies precision scale calibration (`0.1722`) and centering offsets (`Vector3(-0.3239, -0.3585, 0.1169)`) to match an 80 cm real-world deck seated beneath shoes at `Y = 0.055m`.
+- Applies precision scale calibration (`0.1722`) and centering offsets (`Vector3(-0.3239, -0.3585, 0.1169)`) to match an 80 cm real-world deck seated beneath shoes at `Y = 0.0155m`.
 - **LOD Tiers & Shader:** Low tier (`use_low_poly = true`, default `8,328` tris) synthesizes tangents on import. Both top and bottom share a single mesh surface; color split (griptape top vs high-vis orange underside `Color(0.95, 0.30, 0.02)`) is executed per-fragment off model-space normals in `deck_two_tone.gdshader`.
 
 ### 4. `res://scenes/player/SkaterRig.tscn` & `ShoeMesh.gd` (Scene Tree & 3D Foot Assets)

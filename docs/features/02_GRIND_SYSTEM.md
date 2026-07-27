@@ -20,7 +20,7 @@ In Stage 1 of Surface Collision, we engineered [SurfaceProbe.gd](file:///Users/n
   - **5-0 / Nosegrind:** Only the trailing (5-0) or leading (Nosegrind) truck contact axle (`manual_axle_z = ±0.225m`) locks onto the rail while thumbstick pitch holds the opposite truck elevated.
   - **Crooked / Smith / Feeble / Salad:** Angular yaw offsets ($\approx 20^\circ \to 35^\circ$) combined with manual pitch angles, pinning one truck axle while the deck edge presses against the rail side.
 - **Slides (Deck Bottom Contact):**
-  - **Board Slide / Lipslide:** Skater rotates body $90^\circ$ perpendicular to travel vector. The middle of the wooden deck (`SkateDeckMesh` underside at `Y = 0.055m`) rests squarely on the edge.
+  - **Board Slide / Lipslide:** Skater rotates body $90^\circ$ perpendicular to travel vector. The middle of the wooden deck (`SkateDeckMesh` underside at `Y = 0.0155m`) rests squarely on the edge.
   - **Nails/Tailslides:** Extreme ends of the deck (`Z = ±0.4m`) slide along the ledge edge at perpendicular orientation.
 
 ### 3. Frictional Scrubbing & Momentum Retention

@@ -41,7 +41,7 @@ Every foot motion in this document is expressed in **LEADING / TRAILING** terms 
 
 #### Stage A Variant: Late Flips (Direct Air-to-Pocket Thrust)
 - When a flip is triggered late ($>30\%$ into jump ascent or while already hovering peacefully at $Y = 0.18\text{m}$), simply running Stage A from the start would force the shoe down through the revolving deck before sliding out.
-- **Late Flip Invariant:** For late flips, **skip Stage A's initial griptape slide ($Y = 0.055\text{m}$) completely**. The shoe executes a direct high-speed diagonal thrust straight from hover height down-and-out through the corner pocket at **$1.5\times$ standard speed**, capturing the FORCEFUL physical snap characteristic of real-world late flips!
+- **Late Flip Invariant:** For late flips, **skip Stage A's initial griptape slide ($Y = 0.0155\text{m}$) completely**. The shoe executes a direct high-speed diagonal thrust straight from hover height down-and-out through the corner pocket at **$1.5\times$ standard speed**, capturing the FORCEFUL physical snap characteristic of real-world late flips!
 
 ---
 
@@ -66,7 +66,7 @@ When a trick signature includes horizontal yaw rotation (`sig.shuv_deg != 0`):
 ### 4. Mid-Air Catch Stomp (Physical Deck Arrest)
 - **Current Behavior:** Feet remain elevated at hover height ($Y = 0.18\text{m}$) for the entire duration of aerial flight until pavement contact invokes `settle()`.
 - **Target Behavior (Airborne Capture & Manual Catch Future-Proofing):**
-  - On the exact frame our physics catch engine confirms griptape-up alignment within tolerance mid-flight (`_credit_achieved_rotation` or `_advance_flip_settle`), shoe boxes **snap downward from hover height onto the griptape rest pose ($Y = 0.055\text{m}$) mid-air**!
+  - On the exact frame our physics catch engine confirms griptape-up alignment within tolerance mid-flight (`_credit_achieved_rotation` or `_advance_flip_settle`), shoe boxes **snap downward from hover height onto the griptape rest pose ($Y = 0.0155\text{m}$) mid-air**!
   - **Procedural Stomp Symmetry (Auto-Catch Default):** On standard Kickflips/Heelflips (where leading foot flicked), the leading foot stomps down $0.08\text{s}$ before the trailing foot. On Shuv-its, Tre Flips, and Varials (where trailing foot scooped), the trailing foot stomps down first to arrest spin. On straight Ollies/Nollies, both descend simultaneously.
   - **Manual Catch Compatibility (Zero Complexity Overhead):** `FootRig` is driven by explicit commands via `execute_catch_stomp(first_foot: FootInputState.Foot, dual_stomp: bool)`. This keeps `FootRig` completely agnostic as to whether the catch was triggered automatically by revolution completion or manually by future user thumbstick deflections!
   - This visually demonstrates the skater physically stomping and arresting deck spin with their feet before gravity delivers them down onto concrete pavement!

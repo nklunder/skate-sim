@@ -197,7 +197,7 @@ shape = SubResource("BoxShape3D_wall_z")
 mesh = SubResource("BoxMesh_wall_z")
 
 [node name="Platform" type="StaticBody3D" parent="." unique_id=664960703]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -10, 0.4, -18)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -10.861748, 0.4, -18)
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Platform" unique_id=336560322]
 shape = SubResource("BoxShape3D_platform")
@@ -206,7 +206,7 @@ shape = SubResource("BoxShape3D_platform")
 mesh = SubResource("BoxMesh_platform")
 
 [node name="PlatformRamp" type="StaticBody3D" parent="." unique_id=240450519]
-transform = Transform3D(1, 0, 0, 0, 0.97489, 0.22272, 0, -0.22272, 0.97489, -10, 0.303, -12.228)
+transform = Transform3D(1, 0, 0, 0, 0.97489, 0.22272, 0, -0.22272, 0.97489, -10, 0.30914226, -12.228)
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="PlatformRamp" unique_id=800811489]
 transform = Transform3D(1, 0, 0, 0, 0.85379946, -0.52060235, 0, 0.52060235, 0.85379946, -0.18937778, -0.12605667, -0.17512417)
