@@ -140,6 +140,22 @@ var _travel_axis_sign: float = 1.0
 ## further and this has to rise with it.
 @export var flick_rate_min: float = 0.72
 @export var flick_rate_max: float = 1.6
+## How far a released deck may UNWIND to reach a resting orientation instead of carrying on to the
+## next one, in degrees.
+##
+## A board with angular momentum does not spin backwards in mid-air. The rider can catch it and stop
+## it - a small correction with their feet - but unwinding much more than that reads as the
+## simulation running in reverse. Defaults to the measured `catch_cone_deg` (45 deg), which is
+## already this project's answer to "how far off can the rider still grab this board".
+##
+## THE TRADE, and it is only on the 1-versus-2 boundary: raising this lets the rider hold further
+## past a completion and still come back to a single, at the cost of a longer visible reversal. Every
+## other boundary is unaffected, because the window for "exactly N turns" is one full revolution wide
+## wherever this sits - it moves the boundary's PHASE, never its width.
+##
+## Note about 2 frames of rotation are spent before the settle engages, since `flick_held` is
+## computed by TrickState, which ticks after the controller reads it. That lag comes off this budget.
+@export var flip_unwind_max_deg: float = 45.0
 ## Where each axis is heading. DERIVED from the turn counts below, never fixed at the pop - see
 ## _refresh_rotation_targets().
 var target_board_roll: float = 0.0
@@ -168,6 +184,9 @@ var _deck_clearance_held: float = 0.0
 ## it turns freely with no target at all. On release it settles to the nearest resting orientation -
 ## see the Layer 3 block.
 var _flip_free_spinning: bool = false
+## How far the deck may UNWIND to reach a resting orientation instead of carrying on to the next one,
+## in degrees. Set per settle, because the two cases want different answers - see _settle_target().
+var _settle_unwind_deg: float = 180.0
 ## Signed deg/s imparted to the deck at the pop, then held constant - airborne there is no torque on
 ## the board, so constant angular velocity is the physically correct integration.
 ##
@@ -1065,6 +1084,9 @@ func _integrate_flight(delta: float) -> void:
 			# advance: the rider stops when they stop, and the deck tidies up from wherever that was.
 			is_flip_in_progress = false
 			is_flip_settling = true
+			# The rider is reaching to catch it, so it may only be corrected back as far as they
+			# could actually grab it. Beyond that the board simply carries on round.
+			_settle_unwind_deg = flip_unwind_max_deg
 			trick.trick_status_string = "Caught in mid-air!"
 	elif is_flip_in_progress:
 		board_mesh.rotation_degrees.z = move_toward(board_mesh.rotation_degrees.z, target_board_roll, absf(flip_roll_rate) * delta)
@@ -1221,6 +1243,29 @@ func _refresh_rotation_targets() -> void:
 	target_board_roll = _roll_rest_at_pop + 360.0 * float(flip_roll_turns) * _roll_turn_dir
 	target_board_yaw = _yaw_rest_at_pop + 180.0 * float(flip_yaw_turns) * _yaw_turn_dir
 
+## Which resting orientation the deck settles onto: the one just passed, or the next one ahead.
+##
+## A board with angular momentum does not spin BACKWARDS in mid-air. The rider can catch it and stop
+## it, which is a small correction with their feet, but nothing reverses a turning deck - so unwinding
+## more than a little reads as the simulation running in reverse. Past `_settle_unwind_deg` the
+## momentum wins and the deck carries on to the next rest instead.
+##
+## Costs no precision, which is the part that is not obvious: the window for "get exactly N turns" is
+## one full revolution wide wherever the boundary sits. Moving it changes the PHASE of the boundary,
+## never its width - so shrinking the unwind tolerance removes the ugly reversal without making the
+## timing any harder.
+##
+## Direction comes from the spin the deck was GIVEN, not from how it happens to be moving now, which
+## is already backwards once it starts unwinding.
+func _settle_target(angle: float, period: float, rate: float) -> float:
+	var dir: float = -1.0 if rate < 0.0 else 1.0
+	var behind: float = (floorf(angle / period) if dir > 0.0 else ceilf(angle / period)) * period
+	# Half a period IS "nearest", so a late catch passing 180 here keeps its old behaviour exactly.
+	var tolerance: float = minf(_settle_unwind_deg, period * 0.5)
+	if absf(angle - behind) <= tolerance:
+		return behind
+	return behind + period * dir
+
 ## Rotates a late-caught deck onto its resting orientation at the flip's own angular rate.
 ##
 ## This is the whole reason a late catch does not look like a glitch. The board is never teleported
@@ -1231,10 +1276,10 @@ func _refresh_rotation_targets() -> void:
 func _advance_flip_settle(delta: float) -> void:
 	if is_flip_in_progress or not is_flip_settling:
 		return
-	# Recomputed per frame, but stable: move_toward only ever approaches the target, so the nearest
-	# resting orientation cannot change midway.
-	var roll_target: float = _nearest_multiple(board_mesh.rotation_degrees.z, 360.0)
-	var yaw_target: float = _nearest_multiple(board_mesh.rotation_degrees.y, 180.0)
+	# Recomputed per frame, but stable: move_toward only ever approaches the target, so which rest is
+	# being aimed at cannot change midway.
+	var roll_target: float = _settle_target(board_mesh.rotation_degrees.z, 360.0, flip_roll_rate)
+	var yaw_target: float = _settle_target(board_mesh.rotation_degrees.y, 180.0, flip_yaw_rate)
 	# Carry the deck's own angular velocity through the catch rather than switching to a different
 	# rate at the moment of contact - a speed change mid-rotation reads as a hitch even when the
 	# motion stays continuous. Falls back to the reference rates for an axis that was not turning.
@@ -1345,6 +1390,10 @@ func _evaluate_touchdown_landing() -> void:
 		# presented as "manuals do not work after a flip trick" rather than as a failed landing.
 		is_flip_in_progress = false
 		is_flip_settling = true
+		# Landing slammed it flat, so a big correction is exactly what happened. Half a period is
+		# nearest-rounding, which is what keeps a barely-started flip from grinding out a full turn
+		# it never earned.
+		_settle_unwind_deg = 180.0
 		# Genuinely a magnitude operation - the stamp that flattens the deck costs speed without
 		# redirecting it - so scaling the vector in place is what is meant here.
 		velocity.x *= cos(deg_to_rad(catch_err))

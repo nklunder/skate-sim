@@ -38,6 +38,9 @@ var _speed: float = 0.0
 var _catch_err: float = 0.0
 var _turns: int = 0
 var _rolled: float = 0.0
+var _peak_rolled: float = 0.0
+var _prev_roll_signed: float = 0.0
+var _reversed: float = 0.0
 var _case: int = 0
 var _failures: int = 0
 var _reported: bool = false
@@ -99,7 +102,13 @@ const CASES := [
 	# longer a target while free-spinning. The roll-step cap above still applies: the rate must not
 	# change when free-spin begins, since that transition is meant to be invisible.
 	{"label": "double kickflip (held)", "pos": Vector3(4.0, 0.078, 14.0),
-		"flip": true, "scoop": 0, "hold_flick": 46, "jump": 16.0, "expect_turns": 2},
+		"flip": true, "scoop": 0, "hold_flick": 46, "jump": 16.0, "expect_turns": 2,
+		"max_reversed": 50.0},
+	# Released just past a completion, which is the case that used to unwind furthest. A board with
+	# angular momentum does not spin backwards in mid-air, so the correction must stay inside
+	# flip_unwind_max_deg - beyond that the momentum wins and it carries on round instead.
+	{"label": "release mid-turn", "pos": Vector3(4.0, 0.078, 14.0),
+		"flip": true, "scoop": 0, "hold_flick": 36, "jump": 16.0, "max_reversed": 50.0},
 	{"label": "triple kickflip (held)", "pos": Vector3(4.0, 0.078, 14.0),
 		"flip": true, "scoop": 0, "hold_flick": 72, "jump": 16.0, "expect_turns": 3},
 	{"label": "double tre flip (held)", "pos": Vector3(4.0, 0.078, 14.0),
@@ -110,6 +119,7 @@ const CASES := [
 	# alignment can, which is what flick_hold_alignment is for.
 	{"label": "flick then steer away", "pos": Vector3(4.0, 0.078, 14.0),
 		"flip": true, "scoop": 0, "hold_flick": 46, "after_flick": Vector2(0.0, 0.7),
+		"max_reversed": 50.0,
 		"jump": 16.0, "expect_turns": 2},
 ]
 
@@ -155,6 +165,9 @@ func _start_case() -> void:
 	_landed_frame = -1
 	_max_roll_step = 0.0
 	_rolled = 0.0
+	_peak_rolled = 0.0
+	_prev_roll_signed = _skater.board_mesh.rotation_degrees.z
+	_reversed = 0.0
 	_last_roll_move = -1
 	_last_yaw_move = -1
 	if _case == 0:
@@ -213,7 +226,14 @@ func _physics_process(_delta: float) -> void:
 	_prev_roll = roll
 	_prev_yaw = yaw
 	_max_roll_step = maxf(_max_roll_step, d_roll)
-	_rolled += d_roll
+	# SIGNED, deliberately: d_roll above is an absolute step, so accumulating it would make an
+	# unwinding deck appear to keep turning forwards and the reversal below could never be non-zero.
+	_rolled += rad_to_deg(angle_difference(deg_to_rad(_prev_roll_signed), deg_to_rad(roll)))
+	_prev_roll_signed = roll
+	# A deck in mid-air does not spin backwards, so any UNWINDING is a correction the rider's feet
+	# made, and it must stay small enough to read as one.
+	_peak_rolled = maxf(_peak_rolled, absf(_rolled))
+	_reversed = maxf(_reversed, _peak_rolled - absf(_rolled))
 	if _landed_frame < 0:
 		if d_roll > 0.001:
 			_last_roll_move = _frame
@@ -255,6 +275,9 @@ func _finish_case() -> void:
 		elif _last_roll_move != _last_yaw_move:
 			problems.append("roll stopped f%d but yaw stopped f%d (%d frames apart)" % [
 				_last_roll_move, _last_yaw_move, absi(_last_roll_move - _last_yaw_move)])
+	if c.has("max_reversed") and _reversed > float(c["max_reversed"]):
+		problems.append("deck unwound %.1f deg, over %.1f - a mid-air reversal that large reads as the physics running backwards" % [
+			_reversed, float(c["max_reversed"])])
 	# Held rotation: the turn count must have grown by the time the deck came down.
 	if c.has("expect_turns") and _turns != int(c["expect_turns"]):
 		problems.append("completed %d roll turns, expected %d - holding the flick did not extend it" % [
