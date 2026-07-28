@@ -142,7 +142,6 @@ var _pop_board_roll: float = 0.0
 var _pop_board_yaw: float = 0.0
 var _takeoff_vertical_velocity: float = 0.0
 var _initial_pop_pitch_deg: float = 0.0
-var _apex_reached: bool = false
 ## Raw world body yaw accumulated between pop and touchdown. Rider-normalised only when it is
 ## folded into the trick signature, so this stays comparable with board_pivot.rotation_degrees.y.
 var airborne_body_yaw_deg: float = 0.0
@@ -714,6 +713,7 @@ func _physics_process(delta: float) -> void:
 	_recover_landing_dip(delta)
 	_foot_frame.is_grounded = is_grounded
 	_foot_frame.deck_is_spinning = is_flip_in_progress
+	_foot_frame.flip_progress = _flip_progress()
 	foot_rig.solve(delta, _foot_frame, rider, camera_pivot.rotation.y, board_pivot.rotation.y)
 	camera_pivot.follow(delta)
 
@@ -853,7 +853,6 @@ func _execute_pop() -> void:
 	pop_riding_reversed = pivot_reversed()
 	var sig: TrickSignature = trick.current_trick
 	_takeoff_vertical_velocity = maxf(0.0, vertical_velocity)
-	_apex_reached = false
 	var velocity_ratio: float = clampf(_takeoff_vertical_velocity / jump_impulse, 0.0, 1.0)
 	var dynamic_pitch: float = pop_pitch_deg * velocity_ratio
 	if sig.shuv_deg != 0 and sig.flip == TrickSignature.Flip.NONE:
@@ -910,12 +909,6 @@ func _integrate_flight(delta: float) -> void:
 	vertical_velocity -= gravity_accel * delta
 	global_position.y += vertical_velocity * delta
 
-	if not is_grounded and vertical_velocity <= 0.0 and not _apex_reached:
-		_apex_reached = true
-		var sig: TrickSignature = trick.current_trick
-		if not is_flip_in_progress and sig and sig.flip == TrickSignature.Flip.NONE and sig.shuv_deg == 0 and trick.current_pop_state != TrickState.PopState.NONE:
-			foot_rig.execute_catch_stomp(rider.leading_foot, true)
-
 	# Layer 1: Aerial Body & Deck Spin Authority (FS/BS 180s/360s via triggers with fluid momentum smoothing)
 	# Applied to board_pivot.y so rolling travel vector and chase camera stay fixed behind the skater!
 	var target_spin: float = rider.lean * body_spin_speed_deg
@@ -945,10 +938,6 @@ func _integrate_flight(delta: float) -> void:
 			board_mesh.rotation_degrees.z = fmod(board_mesh.rotation_degrees.z, 360.0)
 			board_mesh.rotation_degrees.y = fmod(board_mesh.rotation_degrees.y, 360.0)
 			trick.trick_status_string = "Caught in mid-air!"
-			var sig: TrickSignature = trick.current_trick
-			if sig:
-				var first_foot: RiderInput.Foot = rider.trailing_foot if sig.shuv_deg != 0 else rider.leading_foot
-				foot_rig.execute_catch_stomp(first_foot, false)
 
 	# Touchdown onto whatever surface the probe found - ground, curb top, ramp face.
 	if surface_hit.valid and global_position.y <= _surface_ride_y() and vertical_velocity <= 0.0:
@@ -1109,6 +1098,25 @@ func _apply_airborne_board_pitch(delta: float) -> void:
 
 	board_pivot.rotation_degrees.x = lerpf(board_pivot.rotation_degrees.x,
 		target_pitch_deg * stance_sign(), airborne_pitch_follow * delta)
+
+## How far the deck is through the rotation it was given at the pop, 0 at the pop and 1 as it lands.
+##
+## Measured off the ROTATION ITSELF rather than a stored duration, so it stays correct through the
+## gyroscopic drag applied in _impart_deck_rotation() and needs no separate case per trick. Both axes
+## were scaled to the same trick time, so whichever is turning further answers for both.
+##
+## The feet's tuck is parameterised on this, which is what guarantees they are back on the deck
+## exactly as the griptape comes round - for a kickflip and a tre flip alike.
+func _flip_progress() -> float:
+	if not is_flip_in_progress:
+		return 0.0
+	var span: float = maxf(absf(target_board_roll - _pop_board_roll),
+		absf(target_board_yaw - _pop_board_yaw))
+	if span <= 0.001:
+		return 0.0
+	var done: float = maxf(absf(board_mesh.rotation_degrees.z - _pop_board_roll),
+		absf(board_mesh.rotation_degrees.y - _pop_board_yaw))
+	return clampf(done / span, 0.0, 1.0)
 
 ## Folds the body rotation that just happened into the trick signature and resolves its name.
 ## Called only on successful landings - a bail leaves the previous landed trick on display.

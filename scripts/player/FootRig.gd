@@ -56,34 +56,21 @@ enum FootState {
 ## sluggish. Exported per rig rather than per state for now - split it out when an animation
 ## genuinely wants a different feel from the rest.
 @export_range(0.0, 2.0) var foot_damping_ratio: float = 1.0
-## Stiffness the CATCH STOMP uses instead of the riding pair above. ~0.10 s to arrive, against the
+## Stiffness the AIRBORNE TUCK uses instead of the riding pair above. ~0.10 s response, against the
 ## riding spring's ~0.20 s.
 ##
-## The stomp is the one pose that is an IMPACT rather than a settle, and it was running on the
-## riding spring - critically damped, which is by definition the fastest arrival THAT DOES NOT
-## OVERSHOOT. The feet took 0.25 s to drift 0.16 m and were still ~1-2 cm short of the deck when the
-## board touched down, at which point settle_now() snapped them flat. That asymptote-then-teleport is
-## the "sucking back onto the board" curve: a foot that decelerates into the deck and never quite
-## arrives reads as magnetism, not weight.
-@export var stomp_stiffness: float = 1600.0
-## Deliberately UNDER 1.0, unlike every other pose. The shoe rings a couple of millimetres past the
-## deck and comes back - the compression of a foot landing on something, rather than being drawn to
-## it. That ring is the whole point; without it the arrival is just a faster asymptote.
+## The tuck target is a moving ballistic arc, not a fixed pose, so the spring here is TRACKING rather
+## than settling - and the riding spring is far too soft to track it. At 400 the parabola came out
+## smeared into a slow rise and a lazy fall, which is the opposite of the point.
+@export var air_stiffness: float = 1600.0
+## Slightly under 1.0. The arc delivers the foot back to the deck WITH DOWNWARD SPEED, so the plant
+## is already in the motion; this just lets the shoe compress a couple of millimetres into the deck
+## on arrival instead of stopping dead.
 ##
-## Tuned against the DISCRETE integrator, not the textbook. Semi-implicit Euler adds numerical
-## damping of its own, so the analytic overshoot for a given zeta is not what you get: 0.8 and 0.7
-## both ring by literally zero at this stiffness and frame rate. Measured at k = 1600, dt = 1/60:
-##
-##     zeta   0.70    0.65    0.60    0.55
-##     ring   0.0mm   0.0mm   2.1mm   7.1mm
-##
-## 0.60 settles in 6 frames with ~2 mm of travel past the deck - enough to read as weight, far too
-## little to clip a shoe through it. Re-measure if the stiffness or the physics tick ever changes,
-## because the useful band is narrow and it does not sit where the analytic formula says.
-@export_range(0.0, 2.0) var stomp_damping_ratio: float = 0.6
-## Gap between the first foot's stomp and the second's, in seconds. A rider catches with one foot
-## fractionally ahead of the other; both landing on the identical frame reads as a puppet.
-@export var stomp_stagger: float = 0.08
+## Tuned against the DISCRETE integrator: semi-implicit Euler adds damping of its own, so at
+## k = 1600, dt = 1/60 both 0.70 and 0.65 ring by literally zero, 0.60 gives ~2 mm and 0.55 ~7 mm.
+## The useful band is narrow and nowhere near where the analytic formula puts it.
+@export_range(0.0, 2.0) var air_damping_ratio: float = 0.6
 
 @export_category("Poses")
 ## Max ankle peg lean at full stick deflection.
@@ -101,9 +88,17 @@ enum FootState {
 ## How far the pushing foot travels fore-and-aft across the stroke, in metres. Reaches forward at
 ## the start and thrusts back at the finish.
 @export var push_sweep: float = 0.15
-## Height the shoe boxes lift to while the deck spins underneath them, in metres. Clears the
-## rotating deck so the board does not visibly pass through the rider's feet mid-flip.
-@export var flip_hover_height: float = 0.18
+## PEAK of the tuck arc, in metres - reached halfway through the deck's rotation, not held.
+##
+## Was `flip_hover_height`, a fixed offset the shoe sprang to and then SAT AT, motionless, for about
+## ten frames before dropping. Nothing in free fall does that, and it read exactly as it was: the
+## feet levitating, then stomping. The name is part of the fix - there is no hover height any more,
+## only the top of an arc.
+##
+## Must clear the deck at its widest presentation. The deck is 0.0971 m half-width and rolls about
+## its own long axis, so an edge-on deck reaches that far above the roll axis while the shoes rest
+## only ~0.0155 m above it - see the margin assertion in the tuck probe.
+@export var tuck_peak_height: float = 0.18
 
 ## Longest step the spring is integrated over. A semi-implicit Euler spring goes unstable once the
 ## step approaches its period, and a frame hitch would otherwise fire the shoes off the board.
@@ -130,7 +125,6 @@ class Channel extends RefCounted:
 	var state: FootRig.FootState = FootRig.FootState.RIDING
 	## Seconds since this foot entered its current state. The only clock any animation needs.
 	var phase_time: float = 0.0
-	var stomp_delay: float = 0.0
 	var target_position: Vector3 = Vector3.ZERO
 	var target_rotation: Vector3 = Vector3.ZERO
 	var _vel_position: Vector3 = Vector3.ZERO
@@ -179,6 +173,11 @@ class Frame extends RefCounted:
 	var is_grounded: bool = true
 	## True while the deck is rotating under the rider - the feet must be clear of it.
 	var deck_is_spinning: bool = false
+	## How far the deck is through the rotation it was given at the pop, 0 at the pop and 1 as it
+	## arrives. The tuck arc is parameterised on THIS rather than on wall-clock time, so the feet are
+	## guaranteed to be back on the deck exactly as the griptape comes round, whatever the trick's
+	## duration - a tre flip and a kickflip need no separate cases.
+	var flip_progress: float = 0.0
 
 func _ready() -> void:
 	_left = Channel.new(left_foot)
@@ -212,20 +211,10 @@ func start_push(foot: RiderInput.Foot) -> bool:
 func settle_now() -> void:
 	for ch in [_left, _right]:
 		ch.state = FootState.RIDING
-		ch.stomp_delay = 0.0
 		ch.phase_time = 0.0
 		ch.target_position = ch.rest_position
 		ch.target_rotation = ch.rest_rotation
 		ch.snap()
-
-## Executes a mid-air catch stomp when deck rotation completes or a manual catch is triggered.
-## On single-axis flips or shuvs, first_foot stomps instantly and the second foot follows after 0.08 s.
-## On dual_stomp (straight Ollies/Nollies), both feet stomp together.
-func execute_catch_stomp(first_foot: RiderInput.Foot, dual_stomp: bool) -> void:
-	for ch in [_left, _right]:
-		var is_first: bool = dual_stomp or ((ch == _left) == (first_foot == RiderInput.Foot.LEFT))
-		ch.stomp_delay = 0.0 if is_first else stomp_stagger
-		ch.enter(FootState.STOMPING)
 
 ## Poses both feet for this frame. The single entry point, called from SkaterController's pipeline.
 ##
@@ -235,14 +224,14 @@ func solve(delta: float, frame: Frame, rider: RiderInput, camera_yaw: float,
 		board_yaw: float) -> void:
 	var step: float = minf(delta, MAX_STEP)
 	_advance_states(step, frame)
-	_solve_target(_left, true, rider)
-	_solve_target(_right, false, rider)
+	_solve_target(_left, true, rider, frame)
+	_solve_target(_right, false, rider, frame)
 	for ch in [_left, _right]:
-		# The catch stomp is the one pose that ARRIVES rather than settles, so it integrates on its
-		# own stiffer, under-damped pair - see stomp_stiffness. Only once the foot is actually
-		# travelling: a shoe still waiting out its stagger is holding a hover, which is a settle.
-		if ch.state == FootState.STOMPING and ch.stomp_delay <= 0.0:
-			ch.integrate(stomp_stiffness, stomp_damping_ratio, step)
+		# Both airborne states TRACK a moving arc rather than settling onto a pose, so they take the
+		# stiffer pair - see air_stiffness. STOMPING is included because the shoe arrives there
+		# carrying the arc's downward velocity, and that is the plant.
+		if ch.state == FootState.HOVERING or ch.state == FootState.STOMPING:
+			ch.integrate(air_stiffness, air_damping_ratio, step)
 		else:
 			ch.integrate(foot_stiffness, foot_damping_ratio, step)
 	_drive_ankle_pegs(step, rider, camera_yaw, board_yaw)
@@ -252,8 +241,6 @@ func solve(delta: float, frame: Frame, rider: RiderInput, camera_yaw: float,
 func _advance_states(delta: float, frame: Frame) -> void:
 	for ch in [_left, _right]:
 		ch.phase_time += delta
-		if ch.stomp_delay > 0.0:
-			ch.stomp_delay = maxf(0.0, ch.stomp_delay - delta)
 		if not frame.is_grounded and frame.deck_is_spinning:
 			# Highest priority: the deck is turning over underneath, so the feet get out of its way
 			# whatever else they were doing. A push stroke caught by a pop is simply abandoned - a
@@ -269,17 +256,33 @@ func _advance_states(delta: float, frame: Frame) -> void:
 ## Solves one foot's target pose from its state. Every branch starts at the rest pose and displaces
 ## from it, so nothing an animation writes can leak into the next state - the reason the old
 ## y-only hover() could not be given an x or z term safely.
-func _solve_target(ch: Channel, is_left: bool, rider: RiderInput) -> void:
+func _solve_target(ch: Channel, is_left: bool, rider: RiderInput, frame: Frame) -> void:
 	ch.target_position = ch.rest_position
 	ch.target_rotation = ch.rest_rotation
 	match ch.state:
 		FootState.HOVERING:
-			ch.target_position.y = flip_hover_height
-		FootState.STOMPING:
-			if ch.stomp_delay > 0.0:
-				ch.target_position.y = flip_hover_height
+			ch.target_position.y += tuck_peak_height * _tuck_arc(frame.flip_progress)
 		FootState.PUSHING:
 			ch.target_position += _push_offset(ch.phase_time, is_left, rider)
+
+## Height of the tuck at `p`, as a fraction of tuck_peak_height. A PARABOLA, deliberately.
+##
+## The rider has jumped. Once airborne nothing acts on them but gravity, so their feet travel under
+## CONSTANT acceleration relative to the deck - they leave it with some upward speed, decelerate,
+## peak, and come back down arriving at the speed they left with. 4p(1-p) is exactly that: zero at
+## both ends, 1.0 at the halfway point, constant second derivative throughout.
+##
+## The shape is the whole point, and the near misses are instructive. A fixed offset (what this
+## replaced) holds the foot motionless in mid-air - free fall does not do that. A sine hump looks
+## similar but puts its greatest acceleration at the apex, which reads as a hover with a flick at
+## each end. Only constant acceleration reads as a jump, because it is the only one that is one.
+##
+## Consequence worth stating: the foot arrives with real downward speed rather than easing in, so
+## the plant is already in the arc. There is no separate stomp event, and there is nothing to
+## stagger between the two feet - they are on the same body and leave and return together.
+func _tuck_arc(p: float) -> float:
+	var t: float = clampf(p, 0.0, 1.0)
+	return 4.0 * t * (1.0 - t)
 
 ## Displacement of a pushing foot at `t` seconds into its stroke: a sinusoidal dip toward the
 ## pavement paired with a forward-to-backward sweeping thrust along Z.
