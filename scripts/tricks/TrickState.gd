@@ -69,6 +69,18 @@ var trick_status_string: String = "Grounded"
 var pop_impulse_triggered: bool = false
 var pop_impulse_scale: float = 1.0
 var pop_lateral_impulse_ratio: float = 0.0
+## True while the stick that FIRED the pop has not yet returned to neutral.
+##
+## A rider pops by flicking the OPPOSITE stick, so the loading stick is still buried at takeoff.
+## Airborne pitch read that as a live request and held the deck ~24 deg nose-up for the whole
+## flight, landing them in a manual they never asked for - instead of levelling through apex.
+## Consuming the load at the pop means the stick has to be RELEASED and re-applied before it steers
+## pitch again, which is also what the rider's foot actually does: you do not keep pressing the tail
+## once the board has left the ground.
+##
+## Airborne only. Grounded pitch and the touchdown manual catch are unaffected, so holding through a
+## landing still enters a manual under the two-stage balance law exactly as before.
+var pop_load_spent: bool = false
 var last_pop: TrickSignature.Pop = TrickSignature.Pop.OLLIE
 ## Measurement of the trick in progress. Populated at pop with pop/flip/shuv; SkaterController
 ## fills in body_deg at touchdown, once the body rotation has actually happened.
@@ -93,6 +105,7 @@ func _ready() -> void:
 func _physics_process(_delta: float) -> void:
 	if rider == null:
 		return
+	_release_spent_pop_stick()
 	_handle_keyboard_pop()
 	_detect_pop_load_and_flick()
 
@@ -106,6 +119,7 @@ func _handle_keyboard_pop() -> void:
 	# a spacebar ollie after a 25% ledge drop popped at 25% and looked broken.
 	pop_impulse_scale = 1.0
 	pop_lateral_impulse_ratio = 0.0
+	pop_load_spent = false
 	current_pop_state = PopState.POPPED
 	last_pop = TrickSignature.Pop.OLLIE
 	_build_trick_signature()
@@ -173,12 +187,38 @@ func _release_pop(load_stick: Vector2, left_is_front: bool, reversed_pop: TrickS
 	pop_impulse_triggered = true
 	pop_impulse_scale = _calculate_pop_impulse_scale(load_stick.length())
 	pop_lateral_impulse_ratio = _calculate_lateral_pop_ratio(load_stick.x)
+	pop_load_spent = true
 	current_pop_state = PopState.POPPED
 	# Switch vs regular is the rider's PROFILE stance against their live orientation, so a goofy
 	# rider riding left-foot-forward is in switch exactly as a regular rider riding right-foot-forward.
 	var riding_reversed: bool = (rider.stance == RiderInput.Stance.REGULAR) != left_is_front
 	last_pop = reversed_pop if riding_reversed else forward_pop
 	_build_trick_signature()
+
+## Which stick was HELD to load the pop - the trailing one for an ollie, the leading one for a
+## nollie. Read off `last_pop` rather than `current_pop_state`, which is already POPPED by the time
+## anything asks.
+func _pop_loaded_back_stick() -> bool:
+	return last_pop == TrickSignature.Pop.OLLIE or last_pop == TrickSignature.Pop.SWITCH_OLLIE
+
+## Clears the spent flag once the loading stick has genuinely come home. Runs BEFORE the early-out in
+## _detect_pop_load_and_flick(), which returns while POPPED - i.e. for the whole flight, which is
+## exactly when this needs to be watching.
+func _release_spent_pop_stick() -> void:
+	if not pop_load_spent:
+		return
+	var loaded: Vector2 = rider.back_stick() if _pop_loaded_back_stick() else rider.front_stick()
+	if loaded.length() < manual_zone_min:
+		pop_load_spent = false
+
+## The two sticks as AIRBORNE PITCH should see them: a stick still spent from the pop reads as
+## centred. Every other consumer keeps reading RiderInput directly - this is a statement about one
+## gesture having already been used up, not about where the stick physically is.
+func airborne_back_stick() -> Vector2:
+	return Vector2.ZERO if pop_load_spent and _pop_loaded_back_stick() else rider.back_stick()
+
+func airborne_front_stick() -> Vector2:
+	return Vector2.ZERO if pop_load_spent and not _pop_loaded_back_stick() else rider.front_stick()
 
 ## Vertical impulse as a fraction of full, from how hard the pop stick was loaded.
 ##

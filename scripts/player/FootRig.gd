@@ -56,6 +56,34 @@ enum FootState {
 ## sluggish. Exported per rig rather than per state for now - split it out when an animation
 ## genuinely wants a different feel from the rest.
 @export_range(0.0, 2.0) var foot_damping_ratio: float = 1.0
+## Stiffness the CATCH STOMP uses instead of the riding pair above. ~0.10 s to arrive, against the
+## riding spring's ~0.20 s.
+##
+## The stomp is the one pose that is an IMPACT rather than a settle, and it was running on the
+## riding spring - critically damped, which is by definition the fastest arrival THAT DOES NOT
+## OVERSHOOT. The feet took 0.25 s to drift 0.16 m and were still ~1-2 cm short of the deck when the
+## board touched down, at which point settle_now() snapped them flat. That asymptote-then-teleport is
+## the "sucking back onto the board" curve: a foot that decelerates into the deck and never quite
+## arrives reads as magnetism, not weight.
+@export var stomp_stiffness: float = 1600.0
+## Deliberately UNDER 1.0, unlike every other pose. The shoe rings a couple of millimetres past the
+## deck and comes back - the compression of a foot landing on something, rather than being drawn to
+## it. That ring is the whole point; without it the arrival is just a faster asymptote.
+##
+## Tuned against the DISCRETE integrator, not the textbook. Semi-implicit Euler adds numerical
+## damping of its own, so the analytic overshoot for a given zeta is not what you get: 0.8 and 0.7
+## both ring by literally zero at this stiffness and frame rate. Measured at k = 1600, dt = 1/60:
+##
+##     zeta   0.70    0.65    0.60    0.55
+##     ring   0.0mm   0.0mm   2.1mm   7.1mm
+##
+## 0.60 settles in 6 frames with ~2 mm of travel past the deck - enough to read as weight, far too
+## little to clip a shoe through it. Re-measure if the stiffness or the physics tick ever changes,
+## because the useful band is narrow and it does not sit where the analytic formula says.
+@export_range(0.0, 2.0) var stomp_damping_ratio: float = 0.6
+## Gap between the first foot's stomp and the second's, in seconds. A rider catches with one foot
+## fractionally ahead of the other; both landing on the identical frame reads as a puppet.
+@export var stomp_stagger: float = 0.08
 
 @export_category("Poses")
 ## Max ankle peg lean at full stick deflection.
@@ -196,7 +224,7 @@ func settle_now() -> void:
 func execute_catch_stomp(first_foot: RiderInput.Foot, dual_stomp: bool) -> void:
 	for ch in [_left, _right]:
 		var is_first: bool = dual_stomp or ((ch == _left) == (first_foot == RiderInput.Foot.LEFT))
-		ch.stomp_delay = 0.0 if is_first else 0.08
+		ch.stomp_delay = 0.0 if is_first else stomp_stagger
 		ch.enter(FootState.STOMPING)
 
 ## Poses both feet for this frame. The single entry point, called from SkaterController's pipeline.
@@ -209,8 +237,14 @@ func solve(delta: float, frame: Frame, rider: RiderInput, camera_yaw: float,
 	_advance_states(step, frame)
 	_solve_target(_left, true, rider)
 	_solve_target(_right, false, rider)
-	_left.integrate(foot_stiffness, foot_damping_ratio, step)
-	_right.integrate(foot_stiffness, foot_damping_ratio, step)
+	for ch in [_left, _right]:
+		# The catch stomp is the one pose that ARRIVES rather than settles, so it integrates on its
+		# own stiffer, under-damped pair - see stomp_stiffness. Only once the foot is actually
+		# travelling: a shoe still waiting out its stagger is holding a hover, which is a settle.
+		if ch.state == FootState.STOMPING and ch.stomp_delay <= 0.0:
+			ch.integrate(stomp_stiffness, stomp_damping_ratio, step)
+		else:
+			ch.integrate(foot_stiffness, foot_damping_ratio, step)
 	_drive_ankle_pegs(step, rider, camera_yaw, board_yaw)
 
 ## The arbitration, in one place and in priority order. Read top to bottom: the first branch that

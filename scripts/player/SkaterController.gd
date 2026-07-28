@@ -1082,8 +1082,10 @@ func _apply_airborne_board_pitch(delta: float) -> void:
 	# Solved RIDER-relative throughout - positive is trailing-end-down - then mapped onto the pivot's
 	# local X by stance_sign() in the single assignment at the end.
 	var target_pitch_deg: float = 0.0
-	var front: Vector2 = rider.front_stick()
-	var back: Vector2 = rider.back_stick()
+	# The pitch view of the sticks, not the raw ones: the stick that fired the pop is still buried at
+	# takeoff and reads as centred until the rider releases it. See TrickState.pop_load_spent.
+	var front: Vector2 = trick.airborne_front_stick()
+	var back: Vector2 = trick.airborne_back_stick()
 	var sig: TrickSignature = trick.current_trick
 
 	if _takeoff_vertical_velocity > 0.01 and vertical_velocity > 0.0:
@@ -1097,6 +1099,13 @@ func _apply_airborne_board_pitch(delta: float) -> void:
 		target_pitch_deg += back.y * max_pitch_deg # Tail dip (trailing edge)
 	elif front.y < -pitch_stick_deadzone:
 		target_pitch_deg += front.y * max_pitch_deg # Nose dip (leading edge)
+
+	# The three terms above ADD, so a rider re-applying pitch during the ascent stacks their input on
+	# top of the pop's own tilt. Bounded by the pop angle itself, which is the steepest the deck is
+	# ever meant to sit at. Currently this rarely binds - airborne_pitch_follow is too slow to reach
+	# the stacked target before the pop term decays - and that is precisely why it is worth pinning
+	# down: raise the follow rate for responsiveness and the deck would whip to 74 deg without it.
+	target_pitch_deg = clampf(target_pitch_deg, -pop_pitch_deg, pop_pitch_deg)
 
 	board_pivot.rotation_degrees.x = lerpf(board_pivot.rotation_degrees.x,
 		target_pitch_deg * stance_sign(), airborne_pitch_follow * delta)
