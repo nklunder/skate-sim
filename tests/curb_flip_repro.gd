@@ -37,6 +37,7 @@ var _status: String = ""
 var _speed: float = 0.0
 var _catch_err: float = 0.0
 var _turns: int = 0
+var _rolled: float = 0.0
 var _case: int = 0
 var _failures: int = 0
 var _reported: bool = false
@@ -90,25 +91,25 @@ const CASES := [
 		"flip": true, "scoop": 0, "flick_speed": 42.0, "roll_stops_before": 24},
 	{"label": "kickflip, lazy flick", "pos": Vector3(4.0, 0.078, 14.0),
 		"flip": true, "scoop": 0, "flick_speed": 3.5, "roll_stops_after": 30},
-	# HELD ROTATION. Each flick_hold_min_time of continuous hold asks for one more turn, and turns are
-	# added in proportion to what the trick STARTED with - so a tre flip doubles both axes and stays
-	# synchronised, where adding a flat turn each would pull it apart. `jump` buys the airtime.
+	# HELD ROTATION. The deck free-spins for as long as the flick is held and settles to the NEAREST
+	# resting orientation on release - so how far it gets is simply how long the rider held, and
+	# nothing is quantised or committed to up front. `jump` buys the airtime.
 	#
-	# expect_turns pins the count; the sync assertion pins that it survives doubling. The rate must
-	# not change at the boundary either: the roll-step cap above already fails a stutter, because
-	# extending is meant to be invisible to the deck's angular velocity.
+	# expect_turns is measured on the rotation ACHIEVED, not on any target, because there is no
+	# longer a target while free-spinning. The roll-step cap above still applies: the rate must not
+	# change when free-spin begins, since that transition is meant to be invisible.
 	{"label": "double kickflip (held)", "pos": Vector3(4.0, 0.078, 14.0),
-		"flip": true, "scoop": 0, "hold_flick": 24, "jump": 16.0, "expect_turns": 2},
+		"flip": true, "scoop": 0, "hold_flick": 46, "jump": 16.0, "expect_turns": 2},
 	{"label": "triple kickflip (held)", "pos": Vector3(4.0, 0.078, 14.0),
-		"flip": true, "scoop": 0, "hold_flick": 42, "jump": 16.0, "expect_turns": 3},
+		"flip": true, "scoop": 0, "hold_flick": 72, "jump": 16.0, "expect_turns": 3},
 	{"label": "double tre flip (held)", "pos": Vector3(4.0, 0.078, 14.0),
-		"flip": true, "scoop": 360, "hold_flick": 24, "jump": 16.0, "expect_turns": 2, "sync": true},
+		"flip": true, "scoop": 360, "hold_flick": 58, "jump": 16.0, "expect_turns": 2, "sync": true},
 	# A stick that is still DEFLECTED but no longer pointing where it was flicked must stop
 	# sustaining. The rider flicks left and then pushes down - reaching for a manual on the way in -
 	# and that must not read as "keep flipping". Deflection alone cannot tell the two apart; only
 	# alignment can, which is what flick_hold_alignment is for.
 	{"label": "flick then steer away", "pos": Vector3(4.0, 0.078, 14.0),
-		"flip": true, "scoop": 0, "hold_flick": 24, "after_flick": Vector2(0.0, 0.7),
+		"flip": true, "scoop": 0, "hold_flick": 46, "after_flick": Vector2(0.0, 0.7),
 		"jump": 16.0, "expect_turns": 2},
 ]
 
@@ -153,6 +154,7 @@ func _start_case() -> void:
 	_popped = false
 	_landed_frame = -1
 	_max_roll_step = 0.0
+	_rolled = 0.0
 	_last_roll_move = -1
 	_last_yaw_move = -1
 	if _case == 0:
@@ -211,6 +213,7 @@ func _physics_process(_delta: float) -> void:
 	_prev_roll = roll
 	_prev_yaw = yaw
 	_max_roll_step = maxf(_max_roll_step, d_roll)
+	_rolled += d_roll
 	if _landed_frame < 0:
 		if d_roll > 0.001:
 			_last_roll_move = _frame
@@ -219,7 +222,10 @@ func _physics_process(_delta: float) -> void:
 
 	if _skater.is_grounded and _landed_frame < 0:
 		_landed_frame = _frame
-		_turns = _skater.flip_roll_turns
+		# Turns ACHIEVED, not asked for. Holding no longer buys turns up front - the deck free-spins
+		# and settles to the nearest resting orientation - so the target says nothing about how far
+		# it actually got.
+		_turns = int(roundf(absf(_rolled) / 360.0))
 		_status = _skater.trick.trick_status_string
 		_speed = _skater.current_speed
 		_catch_err = _skater.last_catch_error_deg

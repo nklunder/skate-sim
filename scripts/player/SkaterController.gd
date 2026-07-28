@@ -162,14 +162,12 @@ var _roll_rest_at_pop: float = 0.0
 var _yaw_rest_at_pop: float = 0.0
 var _roll_turn_dir: float = 0.0
 var _yaw_turn_dir: float = 0.0
-## Turns added each time the rider holds the flick through a completion. Set to the turns the trick
-## STARTED with, so extending doubles then triples it - which is what keeps flip and scoop
-## synchronised through a held rotation. Adding a flat one turn per axis would break the ratio that
-## makes them arrive together, and a double tre flip would come apart.
 ## Peak-held clearance the turning deck demands - see _deck_clearance_demand().
 var _deck_clearance_held: float = 0.0
-var _roll_turns_per_extend: int = 0
-var _yaw_turns_per_extend: int = 0
+## True once the deck has completed the turns the flick asked for and the rider is STILL holding, so
+## it turns freely with no target at all. On release it settles to the nearest resting orientation -
+## see the Layer 3 block.
+var _flip_free_spinning: bool = false
 ## Signed deg/s imparted to the deck at the pop, then held constant - airborne there is no torque on
 ## the board, so constant angular velocity is the physically correct integration.
 ##
@@ -1014,8 +1012,7 @@ func _execute_pop() -> void:
 	else:
 		_yaw_turn_dir = 0.0
 		flip_yaw_turns = 0
-	_roll_turns_per_extend = flip_roll_turns
-	_yaw_turns_per_extend = flip_yaw_turns
+	_flip_free_spinning = false
 	_refresh_rotation_targets()
 
 	# The flip loop now owns BoardMesh; any settle still running is superseded by it.
@@ -1056,30 +1053,38 @@ func _integrate_flight(delta: float) -> void:
 	# `deck_is_spinning` in step 8c, and its state machine decides whether that means hovering clear
 	# of the deck or returning to the rest pose - which is the same choice the hover()/lower() pair
 	# used to make from inside this block, but made in one place alongside every other foot state.
-	if is_flip_in_progress:
-		# HELD FLICK: the rider asks for turns by holding, and the target is raised to match.
-		#
-		# DECLARATIVE, not an edge. The count is how many extra turns the hold has earned, so the
-		# target simply tracks it - there is no moment to miss and no way to count the same hold
-		# twice. It also means the extension lands as soon as it is earned, well before the deck
-		# arrives, so move_toward never clamps onto a target that is about to move and the angular
-		# rate never changes: extending is invisible to the deck's velocity, which is the whole point
-		# of holding rather than re-flicking.
-		var asked: int = 1 + trick.flick_hold_turns()
-		if flip_roll_turns < _roll_turns_per_extend * asked:
-			flip_roll_turns = _roll_turns_per_extend * asked
-			flip_yaw_turns = _yaw_turns_per_extend * asked
-			_refresh_rotation_targets()
+	if is_flip_in_progress and _flip_free_spinning:
+		# HELD PAST THE TRICK: no target at all, just angular velocity. The deck turns for as long as
+		# the rider keeps asking, so how far it gets is simply how long they held.
+		board_mesh.rotation_degrees.z += flip_roll_rate * delta
+		board_mesh.rotation_degrees.y += flip_yaw_rate * delta
+		if not trick.flick_held:
+			# Let go. Hand to the settle, which rounds to the NEAREST resting orientation and takes
+			# the short way there - so two and a half turns carry on to three, while two and a tenth
+			# unwind back to two. Nothing is quantised up front and nothing is committed to in
+			# advance: the rider stops when they stop, and the deck tidies up from wherever that was.
+			is_flip_in_progress = false
+			is_flip_settling = true
+			trick.trick_status_string = "Caught in mid-air!"
+	elif is_flip_in_progress:
 		board_mesh.rotation_degrees.z = move_toward(board_mesh.rotation_degrees.z, target_board_roll, absf(flip_roll_rate) * delta)
 		board_mesh.rotation_degrees.y = move_toward(board_mesh.rotation_degrees.y, target_board_yaw, absf(flip_yaw_rate) * delta)
 
 		# Catch trick cleanly when deck revolution completes (grip tape facing up). This is the frame
 		# a mid-air catch stomp will be fired from - see 01_FOOT_ANIMATIONS.md section 4.
 		if is_equal_approx(board_mesh.rotation_degrees.z, target_board_roll) and is_equal_approx(board_mesh.rotation_degrees.y, target_board_yaw):
-			is_flip_in_progress = false
-			board_mesh.rotation_degrees.z = fmod(board_mesh.rotation_degrees.z, 360.0)
-			board_mesh.rotation_degrees.y = fmod(board_mesh.rotation_degrees.y, 360.0)
-			trick.trick_status_string = "Caught in mid-air!"
+			if trick.flick_held:
+				# Still asking. Carry on turning with no target rather than stopping here.
+				#
+				# THE FLICK BUYS THE FIRST TURN, and free-spin only ever starts after it. A brief
+				# hold must not be able to cancel a trick: settling from a tenth of a turn in would
+				# round back to zero and unwind the flip the rider actually asked for.
+				_flip_free_spinning = true
+			else:
+				is_flip_in_progress = false
+				board_mesh.rotation_degrees.z = fmod(board_mesh.rotation_degrees.z, 360.0)
+				board_mesh.rotation_degrees.y = fmod(board_mesh.rotation_degrees.y, 360.0)
+				trick.trick_status_string = "Caught in mid-air!"
 
 	# Touchdown onto whatever surface the probe found - ground, curb top, ramp face.
 	if surface_hit.valid and global_position.y <= _surface_ride_y() and vertical_velocity <= 0.0:
