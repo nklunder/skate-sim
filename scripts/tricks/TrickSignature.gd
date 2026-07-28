@@ -13,7 +13,7 @@ enum Flip { NONE, KICK, HEEL }
 # --- Measured, rider-relative (see rider_sign) -------------------------------
 var pop: Pop = Pop.OLLIE
 var flip: Flip = Flip.NONE
-var shuv_deg: int = 0 # Board rotation RELATIVE TO THE BODY. 0, +/-180, +/-360.
+var scoop_deg: int = 0 # Board rotation RELATIVE TO THE BODY. 0, +/-180, +/-360.
 var body_deg: int = 0 # Body rotation. 0, +/-180, +/-360, +/-540 ...
 var flick_tilt_deg: float = 0.0 # Pitch tilt imparted by flick angle (- = boned, + = rocketed)
 ## How fast the flicking stick was MOVING when the flick registered, in deflection units per second.
@@ -30,14 +30,14 @@ var flick_speed: float = 0.0
 
 # --- Derived -----------------------------------------------------------------
 
-## The board's net turn in the world: body and shuv combine, so they can cancel.
+## The board's net turn in the world: body and scoop combine, so they can cancel.
 ## Zero while body_deg is non-zero is the "board stayed put but I turned" family.
 var board_world_deg: int:
-	get: return body_deg + shuv_deg
+	get: return body_deg + scoop_deg
 
 ## True when body and board turned the same way (as opposed to against each other).
-var body_with_shuv: bool:
-	get: return body_deg != 0 and shuv_deg != 0 and signi(body_deg) == signi(shuv_deg)
+var body_with_scoop: bool:
+	get: return body_deg != 0 and scoop_deg != 0 and signi(body_deg) == signi(scoop_deg)
 
 ## An odd number of half-turns leaves you riding the other way round.
 var lands_switch: bool:
@@ -51,7 +51,7 @@ var lands_switch: bool:
 #
 #   quantity   measured in            already rider-relative?   correction needed
 #   --------   --------------------   ----------------------   --------------------------------
-#   shuv_deg   thumbstick sweep       yes, for facing          which FOOT scoops (swaps by pop)
+#   scoop_deg   thumbstick sweep       yes, for facing          which FOOT scoops (swaps by pop)
 #   body_deg   world yaw of pivot     no                       goofy mirror + riding reversed
 #
 # Getting either wrong does not crash or look obviously broken - the trick simply resolves to its
@@ -64,7 +64,7 @@ static func rider_sign(is_goofy: bool) -> int:
 
 ## World yaw -> rider-relative, for body rotation.
 ##
-## Body rotation is read off board_pivot in world space, so unlike the shuv it is NOT already
+## Body rotation is read off board_pivot in world space, so unlike the scoop it is NOT already
 ## body-relative: when the rider is riding reversed (switch or fakie) their frontside is the other
 ## way round in the world, and the sign must flip to match. `riding_reversed` is sampled from the
 ## pivot's actual yaw at pop time rather than inferred from the pop type, so it stays honest no
@@ -73,19 +73,19 @@ static func body_sign(is_goofy: bool, riding_reversed: bool) -> int:
 	var s: int = rider_sign(is_goofy)
 	return -s if riding_reversed else s
 
-## Thumbstick sweep -> rider-relative, for board (shuv) rotation.
+## Thumbstick sweep -> rider-relative, for board (scoop) rotation.
 ##
 ## The sweep direction is already relative to the rider's body because the sticks map anatomically
 ## to feet. What it is NOT invariant to is WHICH foot does the scooping: the right stick scoops for
 ## an Ollie / Fakie Ollie but the left stick for a Switch Ollie / Nollie, so an identical sweep
 ## means the opposite board direction. Positive result == frontside, in every stance.
-static func shuv_sign(is_goofy: bool, left_foot_scoops: bool) -> int:
+static func scoop_sign(is_goofy: bool, left_foot_scoops: bool) -> int:
 	var s: int = rider_sign(is_goofy)
 	return -s if left_foot_scoops else s
 
 ## One-line readout printed by the HUD after every landing. This is the authoring tool: perform a
 ## trick, read this off the screen, paste the values into TrickNames.TABLE with a name.
 func describe() -> String:
-	return "pop=%s flip=%s shuv=%+d body=%+d world=%+d with_shuv=%s" % [
-		Pop.keys()[pop], Flip.keys()[flip], shuv_deg, body_deg, board_world_deg, body_with_shuv,
+	return "pop=%s flip=%s scoop=%+d body=%+d world=%+d with_scoop=%s" % [
+		Pop.keys()[pop], Flip.keys()[flip], scoop_deg, body_deg, board_world_deg, body_with_scoop,
 	]

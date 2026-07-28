@@ -7,7 +7,7 @@ extends Node
 ## back to itself. The invariants below are about the rider's legs driving the shoes, which is a
 ## property worth pinning:
 ##
-##   THE OLLIE RULE.     A plain ollie - no flip, no shuv - keeps the feet ON the deck for the whole
+##   THE OLLIE RULE.     A plain ollie - no flip, no scoop - keeps the feet ON the deck for the whole
 ##                       jump. In a real ollie the board is dragged up BY the front foot, so tucking
 ##                       the knees raises the rider's HIPS while the feet stay planted and the board
 ##                       rises with them. Feet release only to let the deck turn over underneath.
@@ -30,7 +30,7 @@ const TEST_WORLD := preload("res://scenes/TestWorld.tscn")
 # load: how hard the pop stick is held, which sets pop_impulse_scale and so the tuck effort.
 # min_lift / max_lift: bounds on peak foot lift in metres, the assertion that effort scales.
 const CASES := [
-	# THE OLLIE RULE. A plain ollie - no flip, no shuv - must keep the feet on the deck for the whole
+	# THE OLLIE RULE. A plain ollie - no flip, no scoop - must keep the feet on the deck for the whole
 	# jump. The board is dragged up BY the front foot in a real ollie, so tucking the knees raises the
 	# rider's hips while the feet stay planted and the board rises with them. Feet release only to let
 	# the deck turn over. Asserted at both loads, because the release is a question of whether the

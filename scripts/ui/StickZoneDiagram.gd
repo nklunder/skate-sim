@@ -98,13 +98,13 @@ func _draw_pop_zones(center: Vector2, r: float) -> void:
 	# Nollie Pop Zone (top 80 deg arc around 270° / 12 o'clock)
 	_draw_pie_sector(center, 0.0, r, deg_to_rad(230.0), deg_to_rad(310.0), Color(1.0, 0.8, 0.2, 0.35), Color(1.0, 0.8, 0.2, 0.9))
 	
-	# 180° Shuv Scoop Arcs (Standard scoop window: 40° to 94° from pop axis)
+	# 180° Scoop Scoop Arcs (Standard scoop window: 40° to 94° from pop axis)
 	# Bottom Right / Right side
 	_draw_pie_sector(center, 0.0, r, deg_to_rad(4.0), deg_to_rad(50.0), Color(0.2, 0.8, 1.0, 0.35), Color(0.2, 0.8, 1.0, 0.9))
 	# Bottom Left / Left side
 	_draw_pie_sector(center, 0.0, r, deg_to_rad(130.0), deg_to_rad(176.0), Color(0.2, 0.8, 1.0, 0.35), Color(0.2, 0.8, 1.0, 0.9))
 	
-	# 360° Shuv Deep Scoop Arcs (Deep scoop >= 95° from pop axis, upper side hemispheres)
+	# 360° Scoop Deep Scoop Arcs (Deep scoop >= 95° from pop axis, upper side hemispheres)
 	_draw_pie_sector(center, 0.0, r, deg_to_rad(176.0), deg_to_rad(230.0), Color(0.8, 0.3, 0.9, 0.35), Color(0.8, 0.3, 0.9, 0.9))
 	_draw_pie_sector(center, 0.0, r, deg_to_rad(310.0), deg_to_rad(364.0), Color(0.8, 0.3, 0.9, 0.35), Color(0.8, 0.3, 0.9, 0.9))
 

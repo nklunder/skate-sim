@@ -267,7 +267,7 @@ func solve(delta: float, frame: Frame, rider: RiderInput, camera_yaw: float,
 		# come off: the board is dragged up BY the front foot, so tucking the knees raises the
 		# rider's HIPS while the feet stay planted and the deck rises with them. Feet release only
 		# to let the deck turn over underneath. So the leg's tuck reaches the shoes only while the
-		# deck is actually rotating - on a plain ollie, or any trick with no flip and no shuv, the
+		# deck is actually rotating - on a plain ollie, or any trick with no flip and no scoop, the
 		# feet stay in contact for the whole jump, which is what a rider would tell you they do.
 		#
 		# This gate is why leg_stiffness is sized against the ROTATION and not against airtime: the

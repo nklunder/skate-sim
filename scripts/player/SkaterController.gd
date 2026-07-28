@@ -483,7 +483,7 @@ func _board_axis() -> Vector3:
 #   SkaterRoot   world heading + landing residuals       _board_axis, steering, camera, position
 #   RiderTorso   the RIDER's yaw - shoulders, spin       pivot_reversed, i.e. switch/fakie
 #   BoardPivot   the BOARD's yaw + manual pitch          trick pitch, manuals, feet, stance facts
-#   BoardMesh    the deck's own flip roll + shuv yaw     roll targets, nose/tail identity
+#   BoardMesh    the deck's own flip roll + scoop yaw     roll targets, nose/tail identity
 #
 # RiderTorso and BoardPivot are SIBLINGS, deliberately. The feet stay under BoardPivot - that is
 # what makes switch/fakie mirroring inherited rather than compensated for - and only the torso
@@ -886,7 +886,7 @@ func _execute_pop() -> void:
 	_takeoff_vertical_velocity = maxf(0.0, vertical_velocity)
 	var velocity_ratio: float = clampf(_takeoff_vertical_velocity / jump_impulse, 0.0, 1.0)
 	var dynamic_pitch: float = pop_pitch_deg * velocity_ratio
-	if sig.shuv_deg != 0 and sig.flip == TrickSignature.Flip.NONE:
+	if sig.scoop_deg != 0 and sig.flip == TrickSignature.Flip.NONE:
 		dynamic_pitch = minf(dynamic_pitch, 15.0)
 	_initial_pop_pitch_deg = dynamic_pitch
 
@@ -923,8 +923,8 @@ func _execute_pop() -> void:
 		target_board_roll = roll_rest
 
 	# Spin magnitude comes from the measured signature, never from the display name.
-	if sig.shuv_deg != 0:
-		var spin_deg: float = 360.0 if absi(sig.shuv_deg) == 360 else 180.0
+	if sig.scoop_deg != 0:
+		var spin_deg: float = 360.0 if absi(sig.scoop_deg) == 360 else 180.0
 		target_board_yaw = yaw_rest + (spin_deg * trick.last_scoop_sign)
 		is_flip_in_progress = true
 	else:
@@ -1037,15 +1037,15 @@ static func _nearest_multiple(value: float, step: float) -> float:
 func _impart_deck_rotation(sig: TrickSignature) -> void:
 	var roll_sweep: float = target_board_roll - board_mesh.rotation_degrees.z
 	var yaw_sweep: float = target_board_yaw - board_mesh.rotation_degrees.y
-	# Reference rate each axis would run at alone. The 360 shuv keeps its historical doubling, which
+	# Reference rate each axis would run at alone. The 360 scoop keeps its historical doubling, which
 	# is what makes a tre flip's scoop read as sharper than its flip rather than lazier.
-	var yaw_ref: float = spin_speed_deg * (2.0 if absi(sig.shuv_deg) == 360 else 1.0)
+	var yaw_ref: float = spin_speed_deg * (2.0 if absi(sig.scoop_deg) == 360 else 1.0)
 	var roll_time: float = absf(roll_sweep) / flip_speed_deg if flip_speed_deg > 0.0 else 0.0
 	var yaw_time: float = absf(yaw_sweep) / yaw_ref if yaw_ref > 0.0 else 0.0
 	
 	# Multi-axis rotational inertia coupling: combining simultaneous rotation axes in 3D distributes
-	# angular kinetic energy and extends revolution duration. A 360 flip (360 shuv + flip) carries
-	# twice the secondary angular displacement of a varial flip (180 shuv + flip), naturally extending
+	# angular kinetic energy and extends revolution duration. A 360 flip (360 scoop + flip) carries
+	# twice the secondary angular displacement of a varial flip (180 scoop + flip), naturally extending
 	# its completion and procedural mid-air catch stomp slightly later past jump apex!
 	var primary_time: float = maxf(roll_time, yaw_time)
 	var secondary_time: float = minf(roll_time, yaw_time)
@@ -1094,7 +1094,7 @@ func _advance_flip_settle(delta: float) -> void:
 ## Catching on orientation alone would otherwise credit the full trick however little the deck turned:
 ## a board that had barely begun to flip is also within a few degrees of griptape-up, so popping onto
 ## a high ledge would land and be named a kickflip. Orientation decides whether it is RIDEABLE; the
-## sweep achieved since the pop decides what it is CALLED. A 360 shuv that only made it half way is
+## sweep achieved since the pop decides what it is CALLED. A 360 scoop that only made it half way is
 ## credited as the 180 it actually did.
 func _credit_achieved_rotation() -> void:
 	var sig: TrickSignature = trick.current_trick
@@ -1102,11 +1102,11 @@ func _credit_achieved_rotation() -> void:
 		var roll_turns: int = int(roundf((board_mesh.rotation_degrees.z - _pop_board_roll) / 360.0))
 		if roll_turns == 0:
 			sig.flip = TrickSignature.Flip.NONE
-	if sig.shuv_deg != 0:
+	if sig.scoop_deg != 0:
 		var achieved: int = absi(int(roundf((board_mesh.rotation_degrees.y - _pop_board_yaw) / 180.0)))
-		var intended: int = int(absi(sig.shuv_deg) / 180.0)
+		var intended: int = int(absi(sig.scoop_deg) / 180.0)
 		if achieved < intended:
-			sig.shuv_deg = achieved * 180 * signi(sig.shuv_deg)
+			sig.scoop_deg = achieved * 180 * signi(sig.scoop_deg)
 
 func _apply_airborne_board_pitch(delta: float) -> void:
 	# Solved RIDER-relative throughout - positive is trailing-end-down - then mapped onto the pivot's

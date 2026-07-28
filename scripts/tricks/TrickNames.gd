@@ -7,19 +7,19 @@ class_name TrickNames
 ## How to add one:
 ##   1. Do the trick in game.
 ##   2. Read the "Signature:" line off the HUD, e.g.
-##        pop=OLLIE flip=KICK shuv=-360 body=-180 world=-540 with_shuv=true
+##        pop=OLLIE flip=KICK scoop=-360 body=-180 world=-540 with_scoop=true
 ##   3. Add a row below with the fields you care about and the name you want.
 ##
 ## Matching rules, in plain terms:
 ##
-##   * A row describes a trick EXACTLY. Any of `flip`, `shuv`, `body` you leave out must be zero
-##     for the row to match. So {shuv = -360, flip = KICK} means "360 shuv, kickflip, and no body
+##   * A row describes a trick EXACTLY. Any of `flip`, `scoop`, `body` you leave out must be zero
+##     for the row to match. So {scoop = -360, flip = KICK} means "360 scoop, kickflip, and no body
 ##     rotation" - it will NOT also claim a 360 flip that had a 180 body rotation in it.
 ##   * `pop` is the exception: leave it out and the row covers all four stances, with the stance
 ##     name added as a prefix automatically ("360 Flip" -> "Switch 360 Flip").
-##   * The derived fields (`board_world`, `body_with_shuv`, `lands_switch`) are opt-in: they are
+##   * The derived fields (`board_world`, `body_with_scoop`, `lands_switch`) are opt-in: they are
 ##     only checked if you list them.
-##   * Write `ANY` as a value to explicitly ignore a field, e.g. shuv = ANY.
+##   * Write `ANY` as a value to explicitly ignore a field, e.g. scoop = ANY.
 ##   * Rows are checked top to bottom, FIRST MATCH WINS.
 ##
 ## If a trick comes out with the wrong name, the usual cause is a row above it matching first.
@@ -40,49 +40,49 @@ const ANY := "*"
 
 ## Every field a rule may match on. A typo fails loudly rather than silently never matching.
 const FIELDS: PackedStringArray = [
-	"pop", "flip", "shuv", "body", "board_world", "body_with_shuv", "lands_switch",
+	"pop", "flip", "scoop", "body", "board_world", "body_with_scoop", "lands_switch",
 ]
 
 ## Fields that must be inert when a row does not mention them. This is what stops a general row
 ## from silently swallowing a more elaborate trick.
-const DEFAULT_ZERO: PackedStringArray = ["flip", "shuv", "body"]
+const DEFAULT_ZERO: PackedStringArray = ["flip", "scoop", "body"]
 
 const TABLE: Array[Dictionary] = [
 	# --- Named by net result: board cancelled out, but the body turned. -----
-	# These list shuv = ANY because the cancellation is the point, not the input pair.
-	{board_world = 0, body = -180, shuv = ANY, name = "Body Varial"},
-	{board_world = 0, body = 180, shuv = ANY, name = "FS Body Varial"},
+	# These list scoop = ANY because the cancellation is the point, not the input pair.
+	{board_world = 0, body = -180, scoop = ANY, name = "Body Varial"},
+	{board_world = 0, body = 180, scoop = ANY, name = "FS Body Varial"},
 
 	# --- Bigspin family: board and body turning together --------------------
-	# NOTE: `shuv` is board rotation RELATIVE TO THE BODY, while `board_world` is the total the
-	# board turns in the world (= shuv + body). A trick described as "360 degrees of spin" is 360
-	# of *world* rotation, and the body supplies half of it - so it appears here as shuv = -180
-	# with body = -180, NOT shuv = -360. Always check the `world=` value on the HUD readout.
+	# NOTE: `scoop` is board rotation RELATIVE TO THE BODY, while `board_world` is the total the
+	# board turns in the world (= scoop + body). A trick described as "360 degrees of spin" is 360
+	# of *world* rotation, and the body supplies half of it - so it appears here as scoop = -180
+	# with body = -180, NOT scoop = -360. Always check the `world=` value on the HUD readout.
 	#
 	# The whole family is one motion (board 360 in the world, body 180); the flip decides the name.
-	{shuv = -180, body = -180, flip = NO_FLIP, name = "Bigspin"},
-	{shuv = -180, body = -180, flip = KICK, name = "Bigflip"},
-	{shuv = -180, body = -180, flip = HEEL, name = "Bigspin Heelflip"},
+	{scoop = -180, body = -180, flip = NO_FLIP, name = "Bigspin"},
+	{scoop = -180, body = -180, flip = KICK, name = "Bigflip"},
+	{scoop = -180, body = -180, flip = HEEL, name = "Bigspin Heelflip"},
 
-	{shuv = 180, body = 180, flip = NO_FLIP, name = "FS Bigspin"},
-	{shuv = 180, body = 180, flip = KICK, name = "FS Bigflip"},
-	{shuv = 180, body = 180, flip = HEEL, name = "FS Bigspin Heelflip"},
+	{scoop = 180, body = 180, flip = NO_FLIP, name = "FS Bigspin"},
+	{scoop = 180, body = 180, flip = KICK, name = "FS Bigflip"},
+	{scoop = 180, body = 180, flip = HEEL, name = "FS Bigspin Heelflip"},
 
-	# --- 360 shuv family ----------------------------------------------------
-	{shuv = -360, flip = KICK, name = "360 Flip"},
-	{shuv = 360, flip = KICK, name = "360 Hardflip"},
-	{shuv = 360, flip = HEEL, name = "Laser Flip"},
-	{shuv = -360, flip = HEEL, name = "360 Inward Heelflip"},
-	{shuv = -360, name = "360 Pop Shove-it"},
-	{shuv = 360, name = "FS 360 Pop Shove-it"},
+	# --- 360 scoop family ----------------------------------------------------
+	{scoop = -360, flip = KICK, name = "360 Flip"},
+	{scoop = 360, flip = KICK, name = "360 Hardflip"},
+	{scoop = 360, flip = HEEL, name = "Laser Flip"},
+	{scoop = -360, flip = HEEL, name = "360 Inward Heelflip"},
+	{scoop = -360, name = "360 Pop Shove-it"},
+	{scoop = 360, name = "FS 360 Pop Shove-it"},
 
-	# --- 180 shuv family ----------------------------------------------------
-	{shuv = -180, flip = KICK, name = "Varial Kickflip"},
-	{shuv = 180, flip = KICK, name = "Hardflip"},
-	{shuv = -180, flip = HEEL, name = "Inward Heelflip"},
-	{shuv = 180, flip = HEEL, name = "Varial Heelflip"},
-	{shuv = -180, name = "Pop Shove-it"},
-	{shuv = 180, name = "FS Pop Shove-it"},
+	# --- 180 scoop family ----------------------------------------------------
+	{scoop = -180, flip = KICK, name = "Varial Kickflip"},
+	{scoop = 180, flip = KICK, name = "Hardflip"},
+	{scoop = -180, flip = HEEL, name = "Inward Heelflip"},
+	{scoop = 180, flip = HEEL, name = "Varial Heelflip"},
+	{scoop = -180, name = "Pop Shove-it"},
+	{scoop = 180, name = "FS Pop Shove-it"},
 
 	# --- Body rotation with a flip ------------------------------------------
 	{body = 180, flip = KICK, name = "FS Flip"},
@@ -146,10 +146,10 @@ static func _field(sig: TrickSignature, key: String) -> Variant:
 	match key:
 		"pop": return sig.pop
 		"flip": return sig.flip
-		"shuv": return sig.shuv_deg
+		"scoop": return sig.scoop_deg
 		"body": return sig.body_deg
 		"board_world": return sig.board_world_deg
-		"body_with_shuv": return sig.body_with_shuv
+		"body_with_scoop": return sig.body_with_scoop
 		"lands_switch": return sig.lands_switch
 	return null
 
@@ -168,8 +168,8 @@ static func _describe_unnamed(sig: TrickSignature) -> String:
 		parts.append(word)
 	if sig.body_deg != 0:
 		parts.append("%d Body" % absi(sig.body_deg))
-	if sig.shuv_deg != 0:
-		parts.append("%d Shuv" % absi(sig.shuv_deg))
+	if sig.scoop_deg != 0:
+		parts.append("%d Scoop" % absi(sig.scoop_deg))
 	match sig.flip:
 		TrickSignature.Flip.KICK: parts.append("Kickflip")
 		TrickSignature.Flip.HEEL: parts.append("Heelflip")

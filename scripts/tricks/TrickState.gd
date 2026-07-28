@@ -40,8 +40,8 @@ enum PopState { NONE, LOADING_OLLIE, LOADING_NOLLIE, POPPED }
 @export var scoop_idle_deg: float = 10.0
 
 @export_category("Shove-it Scoop Thresholds")
-@export var shuv_180_threshold_deg: float = 40.0 # Standard scoop buffer window (40° to 94°)
-@export var shuv_360_threshold_deg: float = 95.0 # Deep scoop buffer window (>= 95°)
+@export var scoop_180_threshold_deg: float = 40.0 # Standard scoop buffer window (40° to 94°)
+@export var scoop_360_threshold_deg: float = 95.0 # Deep scoop buffer window (>= 95°)
 ## Deflection below which stick motion is too near the centre for its angle to be meaningful.
 @export_range(0.1, 1.0) var scoop_min_deflection: float = 0.30
 ## Sweep that must accumulate before the scoop's DIRECTION is trusted. Below this the sign is noise.
@@ -101,7 +101,7 @@ var pop_lateral_impulse_ratio: float = 0.0
 ## landing still enters a manual under the two-stage balance law exactly as before.
 var pop_load_spent: bool = false
 var last_pop: TrickSignature.Pop = TrickSignature.Pop.OLLIE
-## Measurement of the trick in progress. Populated at pop with pop/flip/shuv; SkaterController
+## Measurement of the trick in progress. Populated at pop with pop/flip/scoop; SkaterController
 ## fills in body_deg at touchdown, once the body rotation has actually happened.
 var current_trick: TrickSignature = TrickSignature.new()
 var last_scoop_sign: float = -1.0
@@ -325,9 +325,9 @@ func is_preparing_pop() -> bool:
 func _calculate_lateral_pop_ratio(stick_x: float) -> float:
 	# A directional leap and a scoop are the same stick motion at different angles, so the moment a
 	# sweep is large enough to register as a shove-it the lateral impulse must stand down or every
-	# scooped trick launches sideways. Keyed to the shuv threshold itself rather than to a copy of
+	# scooped trick launches sideways. Keyed to the scoop threshold itself rather than to a copy of
 	# its value, so the two cannot drift apart when it is retuned.
-	if max_swept_angle >= shuv_180_threshold_deg:
+	if max_swept_angle >= scoop_180_threshold_deg:
 		return 0.0
 	var abs_x: float = absf(stick_x)
 	if abs_x < lateral_pop_deadzone:
@@ -389,18 +389,18 @@ func _build_trick_signature() -> void:
 
 	sig.flip = active_flip
 
-	var is_360_shuv: bool = max_swept_angle >= shuv_360_threshold_deg \
+	var is_360_scoop: bool = max_swept_angle >= scoop_360_threshold_deg \
 		or Input.is_physical_key_pressed(KEY_H)
-	if is_360_shuv or max_swept_angle >= shuv_180_threshold_deg \
+	if is_360_scoop or max_swept_angle >= scoop_180_threshold_deg \
 			or Input.is_physical_key_pressed(KEY_C):
 		if Input.is_physical_key_pressed(KEY_C) or Input.is_physical_key_pressed(KEY_H):
 			last_scoop_sign = -1.0
 		# `last_scoop_sign` is the RAW thumbstick sweep direction, and stays raw for the physical
 		# rotation SkaterController applies. Converting it to the rider's frame for naming is
-		# TrickSignature.shuv_sign()'s job - see the frame table there.
-		var magnitude: int = 360 if is_360_shuv else 180
-		sig.shuv_deg = int(magnitude * last_scoop_sign) \
-			* TrickSignature.shuv_sign(rider.stance == RiderInput.Stance.GOOFY, not flick_is_left_foot)
+		# TrickSignature.scoop_sign()'s job - see the frame table there.
+		var magnitude: int = 360 if is_360_scoop else 180
+		sig.scoop_deg = int(magnitude * last_scoop_sign) \
+			* TrickSignature.scoop_sign(rider.stance == RiderInput.Stance.GOOFY, not flick_is_left_foot)
 
 	current_trick = sig
 	# Name is resolved at touchdown, once the body rotation has actually happened.

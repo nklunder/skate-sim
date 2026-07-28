@@ -46,38 +46,38 @@ var _reported: bool = false
 # `hold_manual` parks the trailing stick in the manual zone for the whole flight.
 const CASES := [
 	{"label": "kickflip -> curb, manual", "pos": Vector3(4.0, 0.078, 2.0),
-		"flip": true, "shuv": 0, "expect": "Landed directly into Manual!", "hold_manual": true},
+		"flip": true, "scoop": 0, "expect": "Landed directly into Manual!", "hold_manual": true},
 	{"label": "kickflip -> curb", "pos": Vector3(4.0, 0.078, 2.0),
-		"flip": true, "shuv": 0, "expect": "Landed Kickflip!"},
+		"flip": true, "scoop": 0, "expect": "Landed Kickflip!"},
 	{"label": "kickflip -> flat", "pos": Vector3(4.0, 0.078, 14.0),
-		"flip": true, "shuv": 0, "expect": "Landed Kickflip!"},
+		"flip": true, "scoop": 0, "expect": "Landed Kickflip!"},
 	{"label": "kickflip, curb -> flat", "pos": Vector3(4.0, 0.378, -1.0),
-		"flip": true, "shuv": 0, "expect": "Landed Kickflip!"},
+		"flip": true, "scoop": 0, "expect": "Landed Kickflip!"},
 	{"label": "ollie -> curb, manual", "pos": Vector3(4.0, 0.078, 2.0),
-		"flip": false, "shuv": 0, "expect": "Landed directly into Manual!", "hold_manual": true},
+		"flip": false, "scoop": 0, "expect": "Landed directly into Manual!", "hold_manual": true},
 	# Sketchy but rideable: deck is ~36 deg short, inside the cone, so the settle runs several
 	# frames. This is the case that actually exercises the no-teleport guarantee.
 	{"label": "kickflip -> 0.43m ledge", "pos": Vector3(20.0, 0.078, 6.0), "ledge": 0.43,
-		"flip": true, "shuv": 0, "expect": "Landed Kickflip!", "flip_speed": 608.0},
+		"flip": true, "scoop": 0, "expect": "Landed Kickflip!", "flip_speed": 608.0},
 	{"label": "kickflip -> 0.43m, manual", "pos": Vector3(20.0, 0.078, 6.0), "ledge": 0.43,
-		"flip": true, "shuv": 0, "expect": "Landed directly into Manual!", "hold_manual": true, "flip_speed": 608.0},
+		"flip": true, "scoop": 0, "expect": "Landed directly into Manual!", "hold_manual": true, "flip_speed": 608.0},
 	# Past the cone: deck arrives ~56 deg over, foot would slide off the rail. Must still bail.
 	{"label": "kickflip -> 0.55m ledge", "pos": Vector3(20.0, 0.078, 6.0), "ledge": 0.55,
-		"flip": true, "shuv": 0, "expect": "BAIL! (Primo Crash / Incomplete Flip)", "flip_speed": 608.0},
+		"flip": true, "scoop": 0, "expect": "BAIL! (Primo Crash / Incomplete Flip)", "flip_speed": 608.0},
 	# Deck arrives ~213 deg round - genuinely upside down. Must still bail.
 	{"label": "kickflip -> 0.8m platform", "pos": Vector3(-10.0, 0.078, -10.0),
-		"flip": true, "shuv": 0, "expect": "BAIL! (Primo Crash / Incomplete Flip)", "flip_speed": 608.0},
+		"flip": true, "scoop": 0, "expect": "BAIL! (Primo Crash / Incomplete Flip)", "flip_speed": 608.0},
 	# Combined-axis tricks: the sync assertion. Both axes must stop turning on the same frame.
 	# No exact name is asserted - these inject a signature directly, so the resolved name is
 	# TrickNames' business and would make this suite fail for unrelated naming changes. Landing at
 	# all is the assertion; finishing together is the point.
 	{"label": "360 flip (tre) -> flat", "pos": Vector3(4.0, 0.078, 14.0),
-		"flip": true, "shuv": 360, "sync": true},
+		"flip": true, "scoop": 360, "sync": true},
 	{"label": "varial flip -> flat", "pos": Vector3(4.0, 0.078, 14.0),
-		"flip": true, "shuv": 180, "sync": true},
+		"flip": true, "scoop": 180, "sync": true},
 	# Single-axis: nothing to synchronise, but its timing must not have been disturbed by the change.
-	{"label": "360 shuv -> flat", "pos": Vector3(4.0, 0.078, 14.0),
-		"flip": false, "shuv": 360},
+	{"label": "360 scoop -> flat", "pos": Vector3(4.0, 0.078, 14.0),
+		"flip": false, "scoop": 360},
 ]
 
 func _ready() -> void:
@@ -134,7 +134,7 @@ func _physics_process(_delta: float) -> void:
 		var sig := TrickSignature.new()
 		sig.pop = TrickSignature.Pop.OLLIE
 		sig.flip = TrickSignature.Flip.KICK if CASES[_case]["flip"] else TrickSignature.Flip.NONE
-		sig.shuv_deg = CASES[_case]["shuv"]
+		sig.scoop_deg = CASES[_case]["scoop"]
 		st.current_trick = sig
 		st.last_scoop_sign = -1.0
 		st.current_pop_state = TrickState.PopState.POPPED

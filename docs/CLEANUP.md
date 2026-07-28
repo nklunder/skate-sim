@@ -86,7 +86,7 @@ The torsion is in and verified by probe — rigid is a provable no-op, softening
 |---|---|
 | `SurfaceProbe.find_edge_near()` | Uncalled. Spline-free ledge discovery, written as Stage 1 groundwork for the grind system ([02_GRIND_SYSTEM.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/02_GRIND_SYSTEM.md)). **Keep.** |
 | `SurfaceProbe._exclude` | Always empty — the rig is a plain `Node3D` with no physics body, so there is nothing of its own to hit. Kept for when that changes. |
-| `TrickSignature.lands_switch` / `body_with_shuv` | Unused by any `TrickNames.TABLE` row today, but part of the naming API — they exist so rows *can* match on them. **Keep.** |
+| `TrickSignature.lands_switch` / `body_with_scoop` | Unused by any `TrickNames.TABLE` row today, but part of the naming API — they exist so rows *can* match on them. **Keep.** |
 | `SkateBoardConfig` — 8 of 9 fields | Only `turn_speed` is read. Already flagged honestly in the file's own header. Either wire them up or delete them when hardware customisation ([06](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/06_MODULAR_HARDWARE_CUSTOMIZATION.md)) is designed — **not before**, since that feature will decide their shape. |
 
 ---
