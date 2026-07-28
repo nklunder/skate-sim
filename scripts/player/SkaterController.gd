@@ -236,6 +236,22 @@ var _since_push: float = 1000.0
 ## full lean the board yaws ~172 deg/s, so a permanent cap here would make every hard turn drift.
 ## Same transient-versus-steady-state split the camera needed two rates for.
 @export var landing_turn_rate_deg: float = 60.0
+## Largest heading error the paced realignment above will cover, in degrees. Beyond it, the excess
+## is scrubbed by wheel_side_grip at full strength instead.
+##
+## This is the DOMAIN of that pacing, not a tuning knob for its feel. The budget works by the
+## small-angle relation v_lat ~= speed * angle, which needs an along-axis component to rotate travel
+## toward. Land with no forward speed at all - a standing directional pop, which leaps purely
+## sideways - and the angle is 90 deg, the approximation is meaningless, and draining at
+## speed * angular_rate rotates nothing. It just decays the speed linearly over ~1 s while grip,
+## which would have stopped it in 28 ms, never engages at all because lateral never exceeds the
+## budget. The board slid sideways across the ground like ice.
+##
+## Expressed as an ANGLE rather than a speed so it scales with how fast the rider arrived: the
+## question "is this a heading to be swung into line, or a skid the wheels should fight?" is about
+## the direction of travel, not its magnitude. 45 deg is the diagonal - past it, more of the motion
+## is across the wheels than along them, which is a skid by any reading.
+@export var max_realign_angle_deg: float = 45.0
 ## Sideways speed still owed from the last landing, in m/s. A BUDGET that only ever shrinks - never
 ## a state flag inferred from live lateral speed.
 ##
@@ -1164,12 +1180,19 @@ func _evaluate_touchdown_landing() -> void:
 	# grip by _apply_ground_forces(), so a sketchy landing costs real speed.
 	var flat_v := Vector3(velocity.x, 0.0, velocity.z)
 	var land_axis: Vector3 = _board_axis()
+	var land_along: float = absf(flat_v.dot(land_axis))
 	last_landing_slide = (flat_v - land_axis * flat_v.dot(land_axis)).length()
 	# Arm the realignment budget with the sideways speed actually arrived with. Set HERE, where that
 	# speed is measured, and nowhere else - a second writer is exactly how it would start growing
 	# again, which is the failure the budget replaced.
 	#
-	_landing_residual = last_landing_slide
+	# Bounded by the heading error the pacing can actually express - see max_realign_angle_deg. The
+	# budget only covers lateral that is a heading to be ROTATED into line, which needs an along-axis
+	# component to rotate toward; anything beyond that is a skid, and grip fights it at full strength.
+	# Landing with no forward speed at all now arms nothing, so a standing directional pop lands and
+	# stops instead of sliding.
+	_landing_residual = minf(last_landing_slide,
+		land_along * tan(deg_to_rad(max_realign_angle_deg)))
 	if last_landing_slide > max_landing_slide:
 		_landing_residual = 0.0 # Washed out; momentum is killed below, so there is nothing to pace.
 		trick.trick_status_string = "BAIL! (Sideways Landing / Wheel Skid)"
