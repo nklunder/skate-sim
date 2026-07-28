@@ -78,6 +78,17 @@ const CASES := [
 	# Single-axis: nothing to synchronise, but its timing must not have been disturbed by the change.
 	{"label": "360 scoop -> flat", "pos": Vector3(4.0, 0.078, 14.0),
 		"flip": false, "scoop": 360},
+	# FLICK INTENSITY. How hard the stick was thrown scales the rotation rate, so the same trick
+	# finishes sooner or later. Measured throws at 60 Hz from a 0.7 deflection: 1 frame = 42 units/s,
+	# 3 = 14 (the reference), 12 = 3.5. Bounds below are on the frame the roll stops.
+	#
+	# A signature with NO flick measurement means "unmeasured", not "flicked infinitely slowly" - the
+	# keyboard pop sets none, and every other case here injects one. Those must take the reference
+	# rate, which is what keeps this whole feature a no-op for the rest of the suite.
+	{"label": "kickflip, hard flick", "pos": Vector3(4.0, 0.078, 14.0),
+		"flip": true, "scoop": 0, "flick_speed": 42.0, "roll_stops_before": 20},
+	{"label": "kickflip, lazy flick", "pos": Vector3(4.0, 0.078, 14.0),
+		"flip": true, "scoop": 0, "flick_speed": 3.5, "roll_stops_after": 30},
 ]
 
 func _ready() -> void:
@@ -135,6 +146,8 @@ func _physics_process(_delta: float) -> void:
 		sig.pop = TrickSignature.Pop.OLLIE
 		sig.flip = TrickSignature.Flip.KICK if CASES[_case]["flip"] else TrickSignature.Flip.NONE
 		sig.scoop_deg = CASES[_case]["scoop"]
+		if CASES[_case].has("flick_speed"):
+			sig.flick_speed = float(CASES[_case]["flick_speed"])
 		st.current_trick = sig
 		st.last_scoop_sign = -1.0
 		st.current_pop_state = TrickState.PopState.POPPED
@@ -195,6 +208,13 @@ func _finish_case() -> void:
 		elif _last_roll_move != _last_yaw_move:
 			problems.append("roll stopped f%d but yaw stopped f%d (%d frames apart)" % [
 				_last_roll_move, _last_yaw_move, absi(_last_roll_move - _last_yaw_move)])
+	# Flick intensity: a harder throw must finish the rotation sooner, a lazy one later.
+	if c.has("roll_stops_before") and _last_roll_move >= int(c["roll_stops_before"]):
+		problems.append("roll stopped f%d, expected before f%d - a hard flick did not speed it up" % [
+			_last_roll_move, int(c["roll_stops_before"])])
+	if c.has("roll_stops_after") and _last_roll_move <= int(c["roll_stops_after"]):
+		problems.append("roll stopped f%d, expected after f%d - a lazy flick did not slow it down" % [
+			_last_roll_move, int(c["roll_stops_after"])])
 	# The deck must come to rest griptape-up, not a few degrees off.
 	if not _skater.is_flip_settling and not _skater.is_flip_in_progress:
 		var resting: float = absf(_skater.board_mesh.rotation_degrees.z \

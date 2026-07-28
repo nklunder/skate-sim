@@ -46,6 +46,15 @@ enum PopState { NONE, LOADING_OLLIE, LOADING_NOLLIE, POPPED }
 @export_range(0.1, 1.0) var scoop_min_deflection: float = 0.30
 ## Sweep that must accumulate before the scoop's DIRECTION is trusted. Below this the sign is noise.
 @export var scoop_direction_min_deg: float = 15.0
+## How fast a remembered flick speed bleeds away, in deflection-units per second per second.
+##
+## `flick_speed` was a SINGLE-FRAME sample taken on whichever frame the flick happened to cross
+## flick_min_deflection - the same fragility that made the pop impulse depend on thumb timing. A
+## throw is several frames long and its speed is not constant across them, so one sample is noise.
+## Peak-held per stick instead, and the peak bleeds so it measures THIS flick rather than one from
+## two seconds ago.
+@export var flick_speed_decay: float = 60.0
+
 ## How fast a loaded tail springs back once the thumb starts coming home, in stick units per second.
 ##
 ## THE COMPRESSION IS PHYSICAL STATE, not a live readout of the thumb, and that distinction is the
@@ -110,7 +119,9 @@ var max_swept_angle: float = 0.0
 ## load_release_rate; direction tracks the thumb, so gliding the foot across the tail's pockets
 ## still aims the pop in real time. This, not `rider.back_stick()`, is what a pop is measured from.
 var _load: Vector2 = Vector2.ZERO
-
+## Recent peak speed of each stick. See flick_speed_decay.
+var _left_flick_peak: float = 0.0
+var _right_flick_peak: float = 0.0
 var _accumulated_scoop_deg: float = 0.0
 var _last_frame_scoop_angle: float = 0.0
 var last_combo_string: String = "None"
@@ -129,6 +140,7 @@ func _ready() -> void:
 func _physics_process(delta: float) -> void:
 	if rider == null:
 		return
+	_track_flick_speed(delta)
 	_release_spent_pop_stick()
 	_handle_keyboard_pop()
 	_detect_pop_load_and_flick(delta)
@@ -242,6 +254,13 @@ func _release_pop(load_stick: Vector2, left_is_front: bool, reversed_pop: TrickS
 	var riding_reversed: bool = (rider.stance == RiderInput.Stance.REGULAR) != left_is_front
 	last_pop = reversed_pop if riding_reversed else forward_pop
 	_build_trick_signature()
+
+## Peak-holds each stick's speed so a flick is measured by the whole throw rather than by whichever
+## single frame crossed the release threshold.
+func _track_flick_speed(delta: float) -> void:
+	var bleed: float = flick_speed_decay * delta
+	_left_flick_peak = maxf(rider.left_stick_speed, _left_flick_peak - bleed)
+	_right_flick_peak = maxf(rider.right_stick_speed, _right_flick_peak - bleed)
 
 ## Which stick was HELD to load the pop - the trailing one for an ollie, the leading one for a
 ## nollie. Read off `last_pop` rather than `current_pop_state`, which is already POPPED by the time
@@ -360,8 +379,9 @@ func _build_trick_signature() -> void:
 		flick_stick = rider.front_stick()
 		flick_is_left_foot = left_is_front
 
-	# How hard the rider flicked, taken from the flicking stick at the instant the trick is measured.
-	sig.flick_speed = rider.left_stick_speed if flick_is_left_foot else rider.right_stick_speed
+	# How hard the rider flicked: the PEAK of the throw, not the instant the trick happened to be
+	# measured at. See flick_speed_decay.
+	sig.flick_speed = _left_flick_peak if flick_is_left_foot else _right_flick_peak
 
 	# Universal Flick Rule: Flicking outward (-X for Left, +X for Right = behind body) = Kickflip;
 	# Inward (+X for Left, -X for Right = in front of body) = Heelflip.

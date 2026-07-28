@@ -119,6 +119,21 @@ var _travel_axis_sign: float = 1.0
 ## Gyroscopic coupling factor: adds rotational inertia to multi-axis tricks (e.g. 360 flips) so they complete later.
 @export var rotational_complexity_coupling: float = 0.15
 
+@export_group("Flick Intensity")
+## Flick speed, in stick-deflection units per second, that produces the REFERENCE rotation rate -
+## i.e. the rate the deck turned at before flick speed was consumed at all.
+##
+## Measured throws at 60 Hz, from a 0.7 deflection: 1 frame = 42, 2 = 21, 3 = 14, 5 = 8.4, 12 = 3.5.
+## 14 is a brisk three-frame throw, so an ordinary flick lands on 1.0x and the tuning below only
+## has to describe the deviation.
+@export var flick_reference_speed: float = 14.0
+## How much rotation rate follows flick speed. 0 ignores it entirely and restores a fixed rate.
+@export_range(0.0, 2.0) var flick_rate_sensitivity: float = 0.5
+## Bounds on the multiplier. The FLOOR is the important one: a soft flick should turn the deck
+## lazily and risk an incomplete trick, not guarantee a primo - the rider should be able to see it
+## failing and still catch it.
+@export var flick_rate_min: float = 0.6
+@export var flick_rate_max: float = 1.6
 ## Where each axis is heading. DERIVED from the turn counts below, never fixed at the pop - see
 ## _refresh_rotation_targets().
 var target_board_roll: float = 0.0
@@ -1094,9 +1109,23 @@ func _impart_deck_rotation(sig: TrickSignature) -> void:
 		flip_roll_rate = 0.0
 		flip_yaw_rate = 0.0
 		return
-	flip_roll_rate = roll_sweep / trick_time
-	flip_yaw_rate = yaw_sweep / trick_time
+	# How hard it was flicked scales BOTH axes by the same factor, which is what keeps flip and scoop
+	# synchronised: their ratio is what makes them arrive together, and scaling preserves a ratio.
+	var intensity: float = _flick_rate_scale(sig.flick_speed)
+	flip_roll_rate = roll_sweep / trick_time * intensity
+	flip_yaw_rate = yaw_sweep / trick_time * intensity
 
+## Rotation rate multiplier from how hard the rider flicked, around flick_reference_speed.
+##
+## A signature with NO flick measurement means "unmeasured", not "flicked infinitely slowly": the
+## keyboard pop path sets no speed, and a test injecting a signature directly does not either. Both
+## take the reference rate rather than the floor, which is also what keeps this change a no-op for
+## every existing suite.
+func _flick_rate_scale(flick_speed: float) -> float:
+	if flick_speed <= 0.0 or flick_reference_speed <= 0.0:
+		return 1.0
+	var ratio: float = flick_speed / flick_reference_speed
+	return clampf(1.0 + (ratio - 1.0) * flick_rate_sensitivity, flick_rate_min, flick_rate_max)
 
 ## Rebuilds both rotation targets from the turn counts.
 ##
