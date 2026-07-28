@@ -30,6 +30,13 @@ enum PopState { NONE, LOADING_OLLIE, LOADING_NOLLIE, POPPED }
 @export_range(0.0, 1.0) var low_pop_max_ratio: float = 0.25
 ## How far the OPPOSITE stick must be thrown to release the pop.
 @export_range(0.1, 1.0) var flick_min_deflection: float = 0.35
+## How closely the stick must still point along the direction it was flicked for the flick to count
+## as HELD, as a dot product. 1.0 demands the exact direction; 0.6 allows about 53 degrees either way.
+##
+## Alignment rather than mere deflection, because a stick on its way back through the rim is
+## deflected too - and sustaining a rotation because the rider is releasing would be the opposite of
+## what they asked for.
+@export_range(0.0, 1.0) var flick_hold_alignment: float = 0.6
 ## Vertical band the releasing stick must be inside, so a flick reads as a flick and not as the
 ## opposite end being loaded instead.
 @export_range(0.0, 0.5) var flick_release_band: float = 0.20
@@ -119,6 +126,19 @@ var max_swept_angle: float = 0.0
 ## load_release_rate; direction tracks the thumb, so gliding the foot across the tail's pockets
 ## still aims the pop in real time. This, not `rider.back_stick()`, is what a pop is measured from.
 var _load: Vector2 = Vector2.ZERO
+## True while the rider is STILL HOLDING the flick they threw, in the direction they threw it.
+##
+## THE ONE HOLD INPUT FOR THE WHOLE TRICK. A scoop is initiated by the popping foot's arc sweep but
+## sustained by holding the FLICK, so flipping, scooping and both are all extended by the same
+## gesture. That is the same statement flip/scoop sync makes - that a trick is one coherent rotation
+## rather than two things happening near each other - and it is why there is no second hold to
+## disagree with this one. It also means nothing here reads the popping stick, so `pop_load_spent`
+## is not involved.
+var flick_held: bool = false
+## The direction the flick was thrown, and which stick threw it. Remembered at the pop so "still
+## held" can be judged against what the rider actually did rather than against a fixed axis.
+var _flick_dir: Vector2 = Vector2.ZERO
+var _flick_is_left: bool = false
 ## Recent peak speed of each stick. See flick_speed_decay.
 var _left_flick_peak: float = 0.0
 var _right_flick_peak: float = 0.0
@@ -141,6 +161,7 @@ func _physics_process(delta: float) -> void:
 	if rider == null:
 		return
 	_track_flick_speed(delta)
+	_track_flick_hold()
 	_release_spent_pop_stick()
 	_handle_keyboard_pop()
 	_detect_pop_load_and_flick(delta)
@@ -218,6 +239,8 @@ func _detect_pop_load_and_flick(delta: float) -> void:
 		pop_impulse_scale = 1.0
 		max_swept_angle = 0.0
 		_load = Vector2.ZERO
+		_flick_dir = Vector2.ZERO
+		flick_held = false
 		trick_status_string = "Grounded & Rolling"
 
 ## Compression follows the thumb up instantly and back down at load_release_rate. Direction stays
@@ -254,6 +277,15 @@ func _release_pop(load_stick: Vector2, left_is_front: bool, reversed_pop: TrickS
 	var riding_reversed: bool = (rider.stance == RiderInput.Stance.REGULAR) != left_is_front
 	last_pop = reversed_pop if riding_reversed else forward_pop
 	_build_trick_signature()
+
+## Watches whether the thrown flick is still being held out in the direction it was thrown.
+func _track_flick_hold() -> void:
+	if current_pop_state != PopState.POPPED or _flick_dir == Vector2.ZERO:
+		flick_held = false
+		return
+	var stick: Vector2 = rider.left_stick_raw if _flick_is_left else rider.right_stick_raw
+	flick_held = stick.length() >= flick_min_deflection \
+		and stick.normalized().dot(_flick_dir) >= flick_hold_alignment
 
 ## Peak-holds each stick's speed so a flick is measured by the whole throw rather than by whichever
 ## single frame crossed the release threshold.
@@ -382,6 +414,9 @@ func _build_trick_signature() -> void:
 	# How hard the rider flicked: the PEAK of the throw, not the instant the trick happened to be
 	# measured at. See flick_speed_decay.
 	sig.flick_speed = _left_flick_peak if flick_is_left_foot else _right_flick_peak
+	# Remembered so _track_flick_hold() can tell "still holding it" from "on the way back".
+	_flick_dir = flick_stick.normalized() if flick_stick.length() > 0.001 else Vector2.ZERO
+	_flick_is_left = flick_is_left_foot
 
 	# Universal Flick Rule: Flicking outward (-X for Left, +X for Right = behind body) = Kickflip;
 	# Inward (+X for Left, -X for Right = in front of body) = Heelflip.

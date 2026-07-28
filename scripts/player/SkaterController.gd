@@ -156,6 +156,12 @@ var _roll_rest_at_pop: float = 0.0
 var _yaw_rest_at_pop: float = 0.0
 var _roll_turn_dir: float = 0.0
 var _yaw_turn_dir: float = 0.0
+## Turns added each time the rider holds the flick through a completion. Set to the turns the trick
+## STARTED with, so extending doubles then triples it - which is what keeps flip and scoop
+## synchronised through a held rotation. Adding a flat one turn per axis would break the ratio that
+## makes them arrive together, and a double tre flip would come apart.
+var _roll_turns_per_extend: int = 0
+var _yaw_turns_per_extend: int = 0
 ## Signed deg/s imparted to the deck at the pop, then held constant - airborne there is no torque on
 ## the board, so constant angular velocity is the physically correct integration.
 ##
@@ -978,6 +984,8 @@ func _execute_pop() -> void:
 	else:
 		_yaw_turn_dir = 0.0
 		flip_yaw_turns = 0
+	_roll_turns_per_extend = flip_roll_turns
+	_yaw_turns_per_extend = flip_yaw_turns
 	_refresh_rotation_targets()
 
 	# The flip loop now owns BoardMesh; any settle still running is superseded by it.
@@ -1019,6 +1027,17 @@ func _integrate_flight(delta: float) -> void:
 	# of the deck or returning to the rest pose - which is the same choice the hover()/lower() pair
 	# used to make from inside this block, but made in one place alongside every other foot state.
 	if is_flip_in_progress:
+		# HELD FLICK: another turn, asked for BEFORE the deck arrives rather than after.
+		#
+		# Extending after arrival would work, but move_toward clamps exactly on the target - so the
+		# deck would take a part-step onto it, then a full step away next frame, and the rotation
+		# would stutter once per revolution. Asking while it is still one step out means the target
+		# has already moved by the time it gets there and the angular rate never changes at all,
+		# which is the whole point of holding rather than re-flicking.
+		if trick.flick_held and _rotation_arriving(delta):
+			flip_roll_turns += _roll_turns_per_extend
+			flip_yaw_turns += _yaw_turns_per_extend
+			_refresh_rotation_targets()
 		board_mesh.rotation_degrees.z = move_toward(board_mesh.rotation_degrees.z, target_board_roll, absf(flip_roll_rate) * delta)
 		board_mesh.rotation_degrees.y = move_toward(board_mesh.rotation_degrees.y, target_board_yaw, absf(flip_yaw_rate) * delta)
 
@@ -1126,6 +1145,14 @@ func _flick_rate_scale(flick_speed: float) -> float:
 		return 1.0
 	var ratio: float = flick_speed / flick_reference_speed
 	return clampf(1.0 + (ratio - 1.0) * flick_rate_sensitivity, flick_rate_min, flick_rate_max)
+
+## True when both axes are within this frame's travel of their targets - i.e. the deck arrives now.
+##
+## Both, not either: the axes are rate-locked to arrive together, and an axis that is not turning has
+## a zero rate and zero distance left, so it reports arriving and lets the turning one decide.
+func _rotation_arriving(delta: float) -> bool:
+	return absf(target_board_roll - board_mesh.rotation_degrees.z) <= absf(flip_roll_rate) * delta \
+		and absf(target_board_yaw - board_mesh.rotation_degrees.y) <= absf(flip_yaw_rate) * delta
 
 ## Rebuilds both rotation targets from the turn counts.
 ##

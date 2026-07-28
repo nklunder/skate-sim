@@ -36,6 +36,7 @@ var _last_yaw_move: int = -1
 var _status: String = ""
 var _speed: float = 0.0
 var _catch_err: float = 0.0
+var _turns: int = 0
 var _case: int = 0
 var _failures: int = 0
 var _reported: bool = false
@@ -89,6 +90,26 @@ const CASES := [
 		"flip": true, "scoop": 0, "flick_speed": 42.0, "roll_stops_before": 20},
 	{"label": "kickflip, lazy flick", "pos": Vector3(4.0, 0.078, 14.0),
 		"flip": true, "scoop": 0, "flick_speed": 3.5, "roll_stops_after": 30},
+	# HELD ROTATION. Keeping the flick out through a completion asks for another turn, and turns are
+	# added in proportion to what the trick STARTED with - so a tre flip doubles both axes and stays
+	# synchronised, where adding a flat turn each would pull it apart. `jump` buys the airtime.
+	#
+	# expect_turns pins the count; the sync assertion pins that it survives doubling. The rate must
+	# not change at the boundary either: the roll-step cap above already fails a stutter, because
+	# extending is meant to be invisible to the deck's angular velocity.
+	{"label": "double kickflip (held)", "pos": Vector3(4.0, 0.078, 14.0),
+		"flip": true, "scoop": 0, "hold_flick": 25, "jump": 16.0, "expect_turns": 2},
+	{"label": "triple kickflip (held)", "pos": Vector3(4.0, 0.078, 14.0),
+		"flip": true, "scoop": 0, "hold_flick": 50, "jump": 16.0, "expect_turns": 3},
+	{"label": "double tre flip (held)", "pos": Vector3(4.0, 0.078, 14.0),
+		"flip": true, "scoop": 360, "hold_flick": 35, "jump": 16.0, "expect_turns": 2, "sync": true},
+	# A stick that is still DEFLECTED but no longer pointing where it was flicked must stop
+	# sustaining. The rider flicks left and then pushes down - reaching for a manual on the way in -
+	# and that must not read as "keep flipping". Deflection alone cannot tell the two apart; only
+	# alignment can, which is what flick_hold_alignment is for.
+	{"label": "flick then steer away", "pos": Vector3(4.0, 0.078, 14.0),
+		"flip": true, "scoop": 0, "hold_flick": 25, "after_flick": Vector2(0.0, 0.7),
+		"jump": 16.0, "expect_turns": 2},
 ]
 
 func _ready() -> void:
@@ -117,6 +138,14 @@ func _start_case() -> void:
 	_skater.global_position = CASES[_case]["pos"]
 	if CASES[_case].has("flip_speed"):
 		_skater.flip_speed_deg = CASES[_case]["flip_speed"]
+	if CASES[_case].has("jump"):
+		_skater.jump_impulse = float(CASES[_case]["jump"])
+	if CASES[_case].has("hold_flick"):
+		# `flick_held` is computed by TrickState, which is a CHILD of RiderInput and so ticks after
+		# its poll - unlike the hold_manual trick above, whose consumer runs earlier and beats the
+		# zeroing. A held stick therefore has to survive the tick, so the poller is silenced. Only
+		# for these cases, so nothing else in the suite changes.
+		_skater.rider.set_physics_process(false)
 	# Set the vector directly: current_speed is read-only, precisely so nothing can assign a speed
 	# and have a direction silently inferred for it.
 	_skater.velocity = -_skater.global_transform.basis.z * 7.0
@@ -139,6 +168,12 @@ func _physics_process(_delta: float) -> void:
 	# This node sits above SkaterRig in tree order, so writing here lands before the controller reads.
 	if _popped and CASES[_case].get("hold_manual", false):
 		_skater.rider.right_stick_raw = Vector2(0.0, 0.60) # trailing stick, inside 0.20-0.90
+	# Hold the flick out for a while after the pop: each completion reached while it is still held
+	# buys another turn.
+	if _popped and _frame - _pop_frame < int(CASES[_case].get("hold_flick", 0)):
+		_skater.rider.left_stick_raw = Vector2(-0.7, 0.0)
+	elif CASES[_case].has("hold_flick"):
+		_skater.rider.left_stick_raw = CASES[_case].get("after_flick", Vector2.ZERO)
 
 	if _frame == 5:
 		var st: TrickState = _skater.trick
@@ -148,6 +183,11 @@ func _physics_process(_delta: float) -> void:
 		sig.scoop_deg = CASES[_case]["scoop"]
 		if CASES[_case].has("flick_speed"):
 			sig.flick_speed = float(CASES[_case]["flick_speed"])
+		if CASES[_case].has("hold_flick"):
+			# The suite injects the pop, so it must also declare the flick that _build_trick_signature()
+			# would have recorded - otherwise there is no direction to judge "still held" against.
+			st._flick_dir = Vector2(-1.0, 0.0)
+			st._flick_is_left = true
 		st.current_trick = sig
 		st.last_scoop_sign = -1.0
 		st.current_pop_state = TrickState.PopState.POPPED
@@ -179,6 +219,7 @@ func _physics_process(_delta: float) -> void:
 
 	if _skater.is_grounded and _landed_frame < 0:
 		_landed_frame = _frame
+		_turns = _skater.flip_roll_turns
 		_status = _skater.trick.trick_status_string
 		_speed = _skater.current_speed
 		_catch_err = _skater.last_catch_error_deg
@@ -208,6 +249,10 @@ func _finish_case() -> void:
 		elif _last_roll_move != _last_yaw_move:
 			problems.append("roll stopped f%d but yaw stopped f%d (%d frames apart)" % [
 				_last_roll_move, _last_yaw_move, absi(_last_roll_move - _last_yaw_move)])
+	# Held rotation: the turn count must have grown by the time the deck came down.
+	if c.has("expect_turns") and _turns != int(c["expect_turns"]):
+		problems.append("completed %d roll turns, expected %d - holding the flick did not extend it" % [
+			_turns, int(c["expect_turns"])])
 	# Flick intensity: a harder throw must finish the rotation sooner, a lazy one later.
 	if c.has("roll_stops_before") and _last_roll_move >= int(c["roll_stops_before"]):
 		problems.append("roll stopped f%d, expected before f%d - a hard flick did not speed it up" % [
