@@ -872,7 +872,10 @@ func _execute_pop() -> void:
 		var lateral_axis: Vector3 = global_transform.basis.x * _travel_axis_sign
 		lateral_axis.y = 0.0
 		velocity += lateral_axis.normalized() * (trick.pop_lateral_impulse_ratio * max_lateral_pop_impulse)
-		board_pivot.rotation_degrees.y -= trick.pop_lateral_impulse_ratio * lateral_pop_yaw_deg
+		# The deck kicking out under a directional pop is a twist between rider and board, so it winds
+		# the torsion rather than being written straight onto the board's yaw. Written the old way it
+		# would be a yaw the coupling never agreed to, and the torsion would quietly undo it.
+		rider_body.wind_twist(-trick.pop_lateral_impulse_ratio * lateral_pop_yaw_deg)
 		trick.pop_lateral_impulse_ratio = 0.0
 
 	airborne_body_yaw_deg = 0.0
@@ -944,13 +947,16 @@ func _integrate_flight(delta: float) -> void:
 	# come apart later: a boardslide puts the deck across the direction of travel while the rider
 	# still faces near-forward, which is not expressible while one of them IS the other.
 	#
-	# THE COUPLING IS RIGID HERE, on purpose. The board takes the shoulders' delta in full, so this
-	# reproduces the previous behaviour exactly, down to the last decimal - the torsion spring that
-	# will let them diverge is introduced afterwards, on its own, where it can be felt and judged.
+	# The board follows through the TORSION, not by taking the shoulders' delta outright. Turning the
+	# shoulders winds the twist up; relaxing it is what turns the deck. At the default twist_follow
+	# the whole wind-up closes within the same frame, so the deck still tracks the rider exactly and
+	# every previous figure is reproduced - softening it is a separate, deliberate change.
 	var turned: float = rider_body.advance_spin(rider.lean, delta)
 	if turned != 0.0:
-		board_pivot.rotation_degrees.y += turned
+		rider_body.wind_twist(-turned) # the shoulders moved; the deck has not caught up yet
 		airborne_body_yaw_deg += turned
+	board_pivot.rotation_degrees.y += rider_body.solve_twist(delta,
+		rider.stance == RiderInput.Stance.GOOFY)
 
 	# Layer 2: Mid-Air Pitch Control (0.20 to 1.00 thumbsticks to angle nose/tail in air)
 	_apply_airborne_board_pitch(delta)

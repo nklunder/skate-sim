@@ -35,6 +35,29 @@ extends Node3D
 ## own rotational inertia: they cannot start or stop turning instantly.
 @export var spin_response: float = 20.0
 
+@export_category("Torsion")
+## Comfortable twist between the feet and the shoulders, in degrees, and ASYMMETRIC on purpose.
+##
+## Hips externally rotate far further than they internally rotate. That single anatomical fact is
+## what makes a frontside noseslide leave the body short of the board while a backside boardslide
+## lets it come all the way round - the rider runs out of comfortable range one way and not the
+## other. It is also where the 20-35 deg offsets of crooked and Smith grinds come from, for free,
+## rather than from a table of per-trick angles.
+##
+## **If frontside and backside slides come out the wrong way round in play, swap these two.** The
+## magnitudes are anatomy and can be trusted; which one is "external" depends on a sign convention
+## that cannot be settled until there is a ledge to slide on.
+@export var twist_external_deg: float = 45.0
+@export var twist_internal_deg: float = 25.0
+## How hard the board is pulled back into line with the shoulders, per second.
+##
+## STARTS EFFECTIVELY RIGID, which is what makes introducing this a provable no-op: the board closes
+## the whole twist every frame, exactly as a board welded to the rider did. Lower it to let the deck
+## lag the shoulders. A plain relaxation rate rather than a spring, deliberately - a spring stiff
+## enough to be rigid at 60 Hz sits right on the edge of going unstable, and there is no feel to be
+## had from the rigid end of the range anyway.
+@export var twist_follow: float = 1000.0
+
 @export_category("Legs")
 ## Standing leg length, in metres: hip to sole with the rider stood normally on the deck.
 ##
@@ -75,6 +98,14 @@ var spin_rate_deg: float = 0.0
 ## apart in the last decimal for no gain.
 var _leg: float = 0.0
 var _leg_vel: float = 0.0
+## The board's yaw offset from the rider, in degrees - the wind-up between feet and shoulders.
+##
+## Held as its own state rather than derived from the two frames' yaws, and that is load-bearing.
+## The deck kicking out under a directional pop (lateral_pop_yaw_deg) IS a twist, and a coupling
+## that re-derived the twist from the yaws every frame would relax it the instant it was applied.
+## Anything that turns the board relative to the rider therefore winds THIS, and the board's yaw is
+## the consequence.
+var twist_deg: float = 0.0
 
 ## Advances the shoulders one frame under trigger lean, and reports HOW FAR THEY TURNED, in degrees.
 ##
@@ -122,6 +153,36 @@ func solve_legs(delta: float, grounded: bool) -> void:
 	elif _leg < leg_min:
 		_leg = leg_min
 		_leg_vel = 0.0
+
+## Winds the torsion by `deg` - something turned the board relative to the rider. The deck kicking
+## out under a directional pop today; a ledge dragging it round once slides exist.
+func wind_twist(deg: float) -> void:
+	twist_deg += deg
+
+## Relaxes the torsion one frame and returns HOW FAR THE BOARD TURNS, in degrees.
+##
+## `goofy` mirrors the anatomy: a goofy rider is a regular rider reflected, so the comfortable range
+## swaps sides with them.
+func solve_twist(delta: float, goofy: bool) -> float:
+	# Past the comfortable range the joint simply stops. A hard limit rather than a stiffer spring is
+	# the honest shape for something made of bone and ligament rather than muscle, and it means a
+	# ledge dragging the board round can never wind the rider past what a body can actually do.
+	var limit: float = comfort_limit(twist_deg >= 0.0, goofy)
+	var held: float = signf(twist_deg) * minf(absf(twist_deg), limit)
+	# Excess the joint cannot hold. It is NOT discarded: a joint at its limit is rigid, so anything
+	# past the limit drags the board round bodily. Dropping it instead let the tracked twist and the
+	# board's real offset from the rider walk apart - measured 41 deg of twist against 171 deg of
+	# actual lag, i.e. the two frames silently disagreeing about where the board was.
+	var over: float = twist_deg - held
+	twist_deg = held
+	var closed: float = -twist_deg * minf(twist_follow * delta, 1.0)
+	twist_deg += closed
+	return closed - over
+
+## The comfortable limit in one direction, in degrees. Goofy is a regular rider reflected, so the
+## two sides swap with them - which is why this takes the stance rather than assuming it.
+func comfort_limit(positive: bool, goofy: bool) -> float:
+	return twist_external_deg if positive != goofy else twist_internal_deg
 
 ## Stops the shoulders dead. For touchdown, where the rider's weight lands and the spin is resolved
 ## into the rig's heading by _evaluate_touchdown_landing().

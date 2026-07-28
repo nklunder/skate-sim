@@ -68,6 +68,18 @@ A plain componentwise `Vector3` subtraction with no `angle_difference()`. Harmle
 
 ---
 
+## 🕳️ 8. `RiderBody.twist_deg` has no regression coverage yet
+
+`res://scripts/player/RiderBody.gd`
+
+The torsion is in and verified by probe — rigid is a provable no-op, softening produces real lag, and the anatomical clamp mirrors for goofy — but nothing in the suites exercises it, because at the default `twist_follow` it is dormant.
+
+**Why left:** the same reasoning CLEANUP #5 used for `FootRig`, which worked well: write the suite *alongside the first real use*, not before. Until a ledge can constrain the board there is nothing to assert beyond restating the mechanism back to itself.
+
+**Done looks like:** written at the start of the grind/slide work, asserting the invariant that caught the one real bug here — **tracked `twist_deg` must always equal the board's actual yaw offset from the rider** — plus the frontside/backside asymmetry across `{regular, goofy}`.
+
+---
+
 ## 🧊 6. Deliberately dead code — do not "clean up"
 
 | Symbol | Status |
