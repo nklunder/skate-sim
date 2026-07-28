@@ -88,17 +88,6 @@ enum FootState {
 ## How far the pushing foot travels fore-and-aft across the stroke, in metres. Reaches forward at
 ## the start and thrusts back at the finish.
 @export var push_sweep: float = 0.15
-## PEAK of the tuck arc, in metres - reached halfway through the deck's rotation, not held.
-##
-## Was `flip_hover_height`, a fixed offset the shoe sprang to and then SAT AT, motionless, for about
-## ten frames before dropping. Nothing in free fall does that, and it read exactly as it was: the
-## feet levitating, then stomping. The name is part of the fix - there is no hover height any more,
-## only the top of an arc.
-##
-## Must clear the deck at its widest presentation. The deck is 0.0971 m half-width and rolls about
-## its own long axis, so an edge-on deck reaches that far above the roll axis while the shoes rest
-## only ~0.0155 m above it - see the margin assertion in the tuck probe.
-@export var tuck_peak_height: float = 0.18
 
 ## Longest step the spring is integrated over. A semi-implicit Euler spring goes unstable once the
 ## step approaches its period, and a frame hitch would otherwise fire the shoes off the board.
@@ -122,6 +111,11 @@ class Channel extends RefCounted:
 	## angles an ankle has something to return to.
 	var rest_position: Vector3 = Vector3.ZERO
 	var rest_rotation: Vector3 = Vector3.ZERO
+	## Sprung ANIMATION pose, in the deck's frame. Deliberately not the node's own transform: the
+	## shoe the player sees is this plus the rider's leg lift, and the two must not be confused. The
+	## spring carries the animation; the leg is rigid, because a leg is a bone and not a blend.
+	var pose_position: Vector3 = Vector3.ZERO
+	var pose_rotation: Vector3 = Vector3.ZERO
 	var state: FootRig.FootState = FootRig.FootState.RIDING
 	## Seconds since this foot entered its current state. The only clock any animation needs.
 	var phase_time: float = 0.0
@@ -134,6 +128,8 @@ class Channel extends RefCounted:
 		node = foot
 		rest_position = foot.position
 		rest_rotation = foot.rotation
+		pose_position = rest_position
+		pose_rotation = rest_rotation
 		target_position = rest_position
 		target_rotation = rest_rotation
 
@@ -151,16 +147,16 @@ class Channel extends RefCounted:
 	## shoes apart at these stiffnesses.
 	func integrate(stiffness: float, damping_ratio: float, delta: float) -> void:
 		var damping: float = 2.0 * damping_ratio * sqrt(maxf(stiffness, 0.0))
-		_vel_position += ((target_position - node.position) * stiffness - _vel_position * damping) * delta
-		node.position += _vel_position * delta
-		_vel_rotation += ((target_rotation - node.rotation) * stiffness - _vel_rotation * damping) * delta
-		node.rotation += _vel_rotation * delta
+		_vel_position += ((target_position - pose_position) * stiffness - _vel_position * damping) * delta
+		pose_position += _vel_position * delta
+		_vel_rotation += ((target_rotation - pose_rotation) * stiffness - _vel_rotation * damping) * delta
+		pose_rotation += _vel_rotation * delta
 
 	## Puts the shoe on its target immediately and kills the spring. For touchdown, where the
 	## rider's weight lands on the deck and there is nothing gradual about it.
 	func snap() -> void:
-		node.position = target_position
-		node.rotation = target_rotation
+		pose_position = target_position
+		pose_rotation = target_rotation
 		_vel_position = Vector3.ZERO
 		_vel_rotation = Vector3.ZERO
 
@@ -173,11 +169,10 @@ class Frame extends RefCounted:
 	var is_grounded: bool = true
 	## True while the deck is rotating under the rider - the feet must be clear of it.
 	var deck_is_spinning: bool = false
-	## How far the deck is through the rotation it was given at the pop, 0 at the pop and 1 as it
-	## arrives. The tuck arc is parameterised on THIS rather than on wall-clock time, so the feet are
-	## guaranteed to be back on the deck exactly as the griptape comes round, whatever the trick's
-	## duration - a tre flip and a kickflip need no separate cases.
-	var flip_progress: float = 0.0
+	## How far the rider has pulled their feet up off the deck this frame, in metres, straight from
+	## RiderBody.foot_lift(). The rig does not decide it and cannot: it is the output of the rider's
+	## legs, which is the whole point - the feet now MOVE for a reason instead of tracing a path.
+	var foot_lift: float = 0.0
 
 func _ready() -> void:
 	_left = Channel.new(left_foot)
@@ -227,13 +222,20 @@ func solve(delta: float, frame: Frame, rider: RiderInput, camera_yaw: float,
 	_solve_target(_left, true, rider, frame)
 	_solve_target(_right, false, rider, frame)
 	for ch in [_left, _right]:
-		# Both airborne states TRACK a moving arc rather than settling onto a pose, so they take the
-		# stiffer pair - see air_stiffness. STOMPING is included because the shoe arrives there
-		# carrying the arc's downward velocity, and that is the plant.
 		if ch.state == FootState.HOVERING or ch.state == FootState.STOMPING:
 			ch.integrate(air_stiffness, air_damping_ratio, step)
 		else:
 			ch.integrate(foot_stiffness, foot_damping_ratio, step)
+		# THE COMPOSITION: what you see is the rider's leg plus whatever the animation is doing on
+		# top of it. The leg is applied RIGIDLY, after the spring, and that separation is the whole
+		# reason this is two lines rather than one target.
+		#
+		# Springing the shoe toward its own leg length double-filtered the motion: the leg spring
+		# produced the tuck, and the shoe's spring then lagged behind it. The lag cost 16 mm of
+		# clearance in the first frames of a flip - while the deck was turning fastest - and the
+		# board passed through the shoe. A foot is the end of a leg; it does not chase it.
+		ch.node.position = ch.pose_position + Vector3(0.0, frame.foot_lift, 0.0)
+		ch.node.rotation = ch.pose_rotation
 	_drive_ankle_pegs(step, rider, camera_yaw, board_yaw)
 
 ## The arbitration, in one place and in priority order. Read top to bottom: the first branch that
@@ -260,29 +262,8 @@ func _solve_target(ch: Channel, is_left: bool, rider: RiderInput, frame: Frame) 
 	ch.target_position = ch.rest_position
 	ch.target_rotation = ch.rest_rotation
 	match ch.state:
-		FootState.HOVERING:
-			ch.target_position.y += tuck_peak_height * _tuck_arc(frame.flip_progress)
 		FootState.PUSHING:
 			ch.target_position += _push_offset(ch.phase_time, is_left, rider)
-
-## Height of the tuck at `p`, as a fraction of tuck_peak_height. A PARABOLA, deliberately.
-##
-## The rider has jumped. Once airborne nothing acts on them but gravity, so their feet travel under
-## CONSTANT acceleration relative to the deck - they leave it with some upward speed, decelerate,
-## peak, and come back down arriving at the speed they left with. 4p(1-p) is exactly that: zero at
-## both ends, 1.0 at the halfway point, constant second derivative throughout.
-##
-## The shape is the whole point, and the near misses are instructive. A fixed offset (what this
-## replaced) holds the foot motionless in mid-air - free fall does not do that. A sine hump looks
-## similar but puts its greatest acceleration at the apex, which reads as a hover with a flick at
-## each end. Only constant acceleration reads as a jump, because it is the only one that is one.
-##
-## Consequence worth stating: the foot arrives with real downward speed rather than easing in, so
-## the plant is already in the arc. There is no separate stomp event, and there is nothing to
-## stagger between the two feet - they are on the same body and leave and return together.
-func _tuck_arc(p: float) -> float:
-	var t: float = clampf(p, 0.0, 1.0)
-	return 4.0 * t * (1.0 - t)
 
 ## Displacement of a pushing foot at `t` seconds into its stroke: a sinusoidal dip toward the
 ## pavement paired with a forward-to-backward sweeping thrust along Z.

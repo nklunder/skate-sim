@@ -68,21 +68,6 @@ A plain componentwise `Vector3` subtraction with no `angle_difference()`. Harmle
 
 ---
 
-## 🔨 5. `FootRig` has no test coverage
-
-The largest animation surface in the project, and the upcoming work (`01_FOOT_ANIMATIONS.md`) is entirely mirror-sensitive. `BUG_ARCHIVE #4` records that switch/fakie mirror errors are **this project's recurring bug class**, and that they are found by *play*, never by tests, because they fail as a silent mirror image rather than a crash.
-
-**Done looks like:** `tests/foot_rig.tscn` asserting the invariants that can regress silently, across all four of `{regular, goofy} × {forward, switch}`:
-- both feet never leave the deck simultaneously while grounded
-- stance classification stays stable through a complete trick
-- poses converge to rest within N frames of touchdown
-- no NaN reaches a foot transform
-- flick X-sign mirrors correctly between stances
-
-**Why left:** deferred until there are animations worth asserting. Write it *alongside* the first real animation, not before.
-
----
-
 ## 🧊 6. Deliberately dead code — do not "clean up"
 
 | Symbol | Status |
@@ -115,3 +100,4 @@ Kept briefly so a returning agent can see these are **already done** and does no
 - Stale `pop_impulse_scale` on the keyboard pop path (`e04cb31`)
 - Dead: `_since_touchdown`, `SurfaceProbe.set_space()`, `last_pop_type`, `active_flip` as a field (`e04cb31`)
 - ~15 magic thresholds exported across `TrickState` and `SkaterController`
+- `FootRig` test coverage — written alongside the first physics-driven foot motion, as the entry said it should be (`tests/foot_rig.tscn`, 12 cases across `{regular, goofy} × {forward, switch}`)

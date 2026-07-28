@@ -728,10 +728,13 @@ func _physics_process(delta: float) -> void:
 	# The camera MUST run here, after step 7 has integrated position: it feeds velocity forward and
 	# damps toward global_position, so advancing it earlier would frame where the skater was rather
 	# than where they now are.
+	# The rider's legs advance BEFORE the feet are posed, because the feet are the end of the legs.
+	# Grounded clamps them out to standing, so a landing arriving early simply meets the feet.
+	rider_body.solve_legs(delta, is_grounded)
 	_recover_landing_dip(delta)
 	_foot_frame.is_grounded = is_grounded
 	_foot_frame.deck_is_spinning = is_flip_in_progress
-	_foot_frame.flip_progress = _flip_progress()
+	_foot_frame.foot_lift = rider_body.foot_lift()
 	foot_rig.solve(delta, _foot_frame, rider, camera_pivot.rotation.y, board_pivot.rotation.y)
 	camera_pivot.follow(delta)
 
@@ -857,6 +860,9 @@ func _execute_pop() -> void:
 	vertical_velocity = jump_impulse * trick.pop_impulse_scale
 	is_grounded = false
 	trick.pop_impulse_triggered = false
+	# The knees come up as hard as the pop was. Nothing emerges a tuck - it is a muscle - so this is
+	# the one place effort is authored, and it is an impulse rather than a path.
+	rider_body.tuck(trick.pop_impulse_scale)
 
 	if absf(trick.pop_lateral_impulse_ratio) > 0.0:
 		var lateral_axis: Vector3 = global_transform.basis.x * _travel_axis_sign
@@ -1123,25 +1129,6 @@ func _apply_airborne_board_pitch(delta: float) -> void:
 
 	board_pivot.rotation_degrees.x = lerpf(board_pivot.rotation_degrees.x,
 		target_pitch_deg * stance_sign(), airborne_pitch_follow * delta)
-
-## How far the deck is through the rotation it was given at the pop, 0 at the pop and 1 as it lands.
-##
-## Measured off the ROTATION ITSELF rather than a stored duration, so it stays correct through the
-## gyroscopic drag applied in _impart_deck_rotation() and needs no separate case per trick. Both axes
-## were scaled to the same trick time, so whichever is turning further answers for both.
-##
-## The feet's tuck is parameterised on this, which is what guarantees they are back on the deck
-## exactly as the griptape comes round - for a kickflip and a tre flip alike.
-func _flip_progress() -> float:
-	if not is_flip_in_progress:
-		return 0.0
-	var span: float = maxf(absf(target_board_roll - _pop_board_roll),
-		absf(target_board_yaw - _pop_board_yaw))
-	if span <= 0.001:
-		return 0.0
-	var done: float = maxf(absf(board_mesh.rotation_degrees.z - _pop_board_roll),
-		absf(board_mesh.rotation_degrees.y - _pop_board_yaw))
-	return clampf(done / span, 0.0, 1.0)
 
 ## Folds the body rotation that just happened into the trick signature and resolves its name.
 ## Called only on successful landings - a bail leaves the previous landed trick on display.

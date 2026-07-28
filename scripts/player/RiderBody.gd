@@ -35,8 +35,45 @@ extends Node3D
 ## own rotational inertia: they cannot start or stop turning instantly.
 @export var spin_response: float = 20.0
 
+@export_category("Legs")
+## Standing leg length, in metres: hip to sole with the rider stood normally on the deck.
+##
+## The feet sit ON the deck at this length by definition, so it is the ZERO of foot lift rather than
+## a number the feet are ever compared against. Its absolute value only starts to matter when a
+## torso mesh hangs off it.
+@export var stand_height: float = 0.90
+## Shortest the legs can be pulled up, in metres. A knee tuck has an anatomical limit; without one,
+## a hard enough pop would fold the rider through their own hips.
+@export var leg_min: float = 0.55
+## How hard the legs pull back toward standing once tucked. Sets the RECOVERY TIME, and it is sized
+## against AIRTIME rather than picked for its own sake: the tuck has to outlast the deck's rotation,
+## or the feet come home while the board is still turning and it clips straight through them.
+@export var leg_stiffness: float = 30.0
+## Well under 1.0. This is not styling - it is what makes the tuck a broad hump that HOLDS the feet
+## clear rather than a spike that peaks and immediately decays. Measured at k = 30: the legs rise,
+## stay above the deck's edge-on reach for ~17 frames, and arrive back at standing right as the
+## board does. Overshoot past standing is invisible, since foot_lift() floors at zero - the feet
+## cannot be pushed through the deck by the leg ringing.
+@export_range(0.0, 2.0) var leg_damping_ratio: float = 0.3
+## Retraction speed given to the legs at the pop, in metres per second, at FULL pop impulse.
+##
+## This is the one muscular command in the whole arrangement, and it is deliberately an IMPULSE
+## rather than a path. A knee tuck is not gravity - nothing emerges it - so something has to ask for
+## it; the honest place to draw the line is authoring the effort and letting integration produce the
+## motion. Everything downstream then follows for free: it scales with how hard the pop was, an
+## early landing simply meets the feet on the way, and a straight ollie tucks without a special case
+## because this hangs off the POP rather than off a flip that may not exist.
+@export var tuck_impulse: float = 1.35
+
 ## Signed deg/s the shoulders are currently turning at.
 var spin_rate_deg: float = 0.0
+## Live leg length. The rider and the board are BOTH projectiles and gravity cancels exactly in the
+## difference between two projectiles, so their separation is not governed by gravity at all - it is
+## governed entirely by the legs. That is why there is no second ballistic integrator here to
+## subtract from the board's: it would be redundant, and two integrations of the same g would drift
+## apart in the last decimal for no gain.
+var _leg: float = 0.0
+var _leg_vel: float = 0.0
 
 ## Advances the shoulders one frame under trigger lean, and reports HOW FAR THEY TURNED, in degrees.
 ##
@@ -57,7 +94,38 @@ func advance_spin(lean: float, delta: float) -> float:
 	rotation_degrees.y += turned
 	return turned
 
+## How far the feet are lifted off the deck, in metres. Zero while stood normally.
+##
+## The whole of the airborne foot motion is this one number. It replaced a parabola authored against
+## flip progress, which could not answer three ordinary questions: a weak pop tucked exactly as hard
+## as a full one, an early landing was snapped flat mid-arc, and a straight ollie - having no flip to
+## be a progress OF - lifted the feet by literally nothing for the entire jump.
+func foot_lift() -> float:
+	return maxf(0.0, stand_height - _leg)
+
+## Tucks the knees, at `scale` of full effort. Called at the pop with the same impulse scale the
+## jump itself is given, so the tuck is as strong as the pop that caused it.
+func tuck(scale: float) -> void:
+	_leg_vel -= tuck_impulse * clampf(scale, 0.0, 1.0)
+
+## Advances the legs one frame. `grounded` clamps them out to standing: a foot cannot sink through
+## the deck it is standing on, and that clamp IS the contact - it is what makes a landing arriving
+## early simply meet the feet rather than needing the animation cut short.
+func solve_legs(delta: float, grounded: bool) -> void:
+	var damping: float = 2.0 * leg_damping_ratio * sqrt(maxf(leg_stiffness, 0.0))
+	_leg_vel += ((stand_height - _leg) * leg_stiffness - _leg_vel * damping) * delta
+	_leg += _leg_vel * delta
+	if grounded and _leg < stand_height:
+		_leg = stand_height
+		_leg_vel = 0.0
+	elif _leg < leg_min:
+		_leg = leg_min
+		_leg_vel = 0.0
+
 ## Stops the shoulders dead. For touchdown, where the rider's weight lands and the spin is resolved
 ## into the rig's heading by _evaluate_touchdown_landing().
 func halt_spin() -> void:
 	spin_rate_deg = 0.0
+
+func _ready() -> void:
+	_leg = stand_height
