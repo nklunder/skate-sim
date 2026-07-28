@@ -131,8 +131,21 @@ func follow(delta: float) -> void:
 
 	# Heading of travel, held below a threshold: the heading of a near-zero vector is noise, and that
 	# is exactly the state at the top of a bank in the instant before a reversal.
+	#
+	# Measured ALONG THE WHEELS, not on total speed. A heading is where the rider is being carried,
+	# and only motion along the rolling axis carries them anywhere they are pointed - sideways motion
+	# is a translation of a rider whose heading has not changed. A standing directional pop leaps
+	# bodily sideways at up to 1.5 m/s, which clears travel_min_speed outright: read as a heading, it
+	# swung the camera a full 90 deg mid-flight and then PARKED it there, because travel stops on
+	# landing and the last heading is held. The rider ended up filmed from the side having never
+	# turned. Total speed cannot tell that apart from real travel; the along-axis component can.
+	#
+	# Costs the bank reversal nothing, which is the case this guard exists for: gravity reverses
+	# travel ALONG the axis, so the component tested here is exactly the one that flips sign.
 	var flat := Vector2(velocity.x, velocity.z)
-	if flat.length() > skater.travel_min_speed:
+	var roll_axis := Vector2(-skater.global_transform.basis.z.x, -skater.global_transform.basis.z.z)
+	if roll_axis.length_squared() > 0.000001 \
+			and absf(flat.dot(roll_axis.normalized())) > skater.travel_min_speed:
 		_travel_heading = atan2(-flat.x, -flat.y)
 
 	# Where the camera wants to sit: behind travel, orbited toward the rider's chosen side. A node
