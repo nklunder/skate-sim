@@ -228,6 +228,12 @@ var _foot_frame := FootRig.Frame.new()
 ## Steering authority retained while loading a pop, when the rider's weight has shifted onto the
 ## tail ready to snap it down. Registered as a contributor in _lean_authority().
 @export_range(0.0, 1.0) var pop_load_turn_damping: float = 0.2
+## Steering authority while balanced in a manual. One truck is off the ground, so there is less to
+## lean with than on four wheels - but it is a BALANCE, not a pop load, and charging it the pop's
+## damping is what made manuals feel stiff.
+@export_range(0.0, 1.0) var manual_turn_damping: float = 0.8
+## Deck pitch past which it counts as being up on one truck, in degrees.
+@export var manual_pitch_min_deg: float = 2.0
 ## Steering authority retained at the START of a push stroke, easing back to full as it finishes.
 ##
 ## On a real board you cannot carve while pushing, and the reason is anatomical rather than
@@ -640,8 +646,15 @@ func flip_roll_sign() -> float:
 ## Grinds and manuals hang off here when they arrive.
 func _lean_authority() -> float:
 	var authority: float = 1.0
+	# A manual is BALANCE, not a pop load, and the two are not distinguishable by stick depth alone:
+	# is_preparing_pop() fires at pop_load_threshold, so a deep manual was being charged the pop's
+	# 80% damping. That put a cliff at 0.70 - full authority below it, a fifth of it above - and
+	# steering that falls away mid-manual is exactly what "too stiff" feels like. Checked FIRST, so
+	# an established manual is never mistaken for a rider winding up to pop.
+	if is_manualing():
+		authority = minf(authority, manual_turn_damping)
 	# Loading a pop shifts the weight back onto the tail, ready to snap it down.
-	if trick.is_preparing_pop():
+	elif trick.is_preparing_pop():
 		authority = minf(authority, pop_load_turn_damping)
 	# Pushing puts a foot on the ground, leaving nothing over the back truck to lean with. Recovers
 	# as the stroke completes rather than snapping back, which is both what happens physically and
@@ -649,6 +662,17 @@ func _lean_authority() -> float:
 	if _since_push < push_stroke_time:
 		authority = minf(authority, lerpf(push_turn_damping, 1.0, _since_push / push_stroke_time))
 	return authority
+
+## True while the rider is BALANCED on one truck: the deck is genuinely pitched AND they are asking
+## for it.
+##
+## Both halves are needed. Pitch alone would catch the automatic nose lift of a stationary kickturn,
+## which is not a manual and must keep its full turn rate. Input alone would call it a manual before
+## the deck had actually come up.
+func is_manualing() -> bool:
+	if not is_grounded or absf(rider_pitch_deg()) <= manual_pitch_min_deg:
+		return false
+	return trick.holds_tail_balance() or trick.holds_nose_balance()
 
 ## Ground dynamics: slope gravity, wheel grip and rolling friction.
 ##

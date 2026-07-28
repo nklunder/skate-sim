@@ -103,6 +103,15 @@ const CASES := [
 		"land_yaw": 15.0, "max_settled_off_axis": 4.0, "max_realign_frames": 40},
 	{"label": "land -15 deg, then hold lean +", "speed": 7.0, "lean": 1.0, "run": 150,
 		"land_yaw": -15.0, "max_settled_off_axis": 4.0, "max_realign_frames": 40},
+	# A MANUAL MUST STILL STEER. is_preparing_pop() fires at pop_load_threshold, so a manual held
+	# deeper than that used to be charged the POP's 80% damping - full authority below 0.70 and a
+	# fifth of it above, a cliff in the middle of a trick the rider is actively balancing. Both
+	# depths are tested because only the deep one was ever broken, and a single shallow case would
+	# have reported the mechanism healthy.
+	{"label": "steer in a shallow manual", "speed": 4.0, "lean": 1.0, "run": 60,
+		"manual_hold": 0.50, "min_turned": 100.0},
+	{"label": "steer in a DEEP manual", "speed": 4.0, "lean": 1.0, "run": 60,
+		"manual_hold": 0.85, "min_turned": 100.0},
 ]
 
 func _ready() -> void:
@@ -174,6 +183,15 @@ func _physics_process(delta: float) -> void:
 
 	# Rewritten every tick: _poll_inputs() zeroes lean with no device attached.
 	_skater.rider.lean = float(c["lean"])
+	if c.has("manual_hold"):
+		# Trailing stick held down: the balance input that puts the deck up on one truck.
+		# The poller must be silenced or TrickState never sees it - it is a CHILD of RiderInput and
+		# ticks after the poll that zeroes the sticks, so current_pop_state would stay NONE and
+		# is_preparing_pop() could never fire. Without this the case cannot reproduce the very cliff
+		# it exists to pin, and passes whether the bug is present or not.
+		_skater.rider.set_physics_process(false)
+		_skater.rider.right_stick_raw = Vector2(0.0, float(c["manual_hold"]))
+		_skater.rider.right_mag = _skater.rider.right_stick_raw.length()
 	if c.has("push_every") and _frame % int(c["push_every"]) == 0:
 		_skater.rider.push_right_triggered = true
 
@@ -225,6 +243,12 @@ func _finish_case() -> void:
 	var c: Dictionary = CASES[_case]
 	var problems: Array[String] = []
 	var turned: float = absf(_turned)
+	if c.has("min_turned"):
+		if not _skater.is_manualing():
+			problems.append("never entered a manual - the case is not testing what it claims")
+		elif turned < float(c["min_turned"]):
+			problems.append("turned only %.1f deg in a manual, expected at least %.1f - steering authority is being cut" % [
+				turned, float(c["min_turned"])])
 	var detail: String = "turned %5.1f deg | offAxis %4.1f (settled %4.1f) | peak %4.2f m/s | posJump %.4f m | paced %d/%d" % [
 		turned, _max_off_axis, _settled_off_axis, _max_speed, _max_pos_jump, _realigning_frames, _frame]
 
