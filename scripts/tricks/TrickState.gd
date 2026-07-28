@@ -37,6 +37,31 @@ enum PopState { NONE, LOADING_OLLIE, LOADING_NOLLIE, POPPED }
 ## deflected too - and sustaining a rotation because the rider is releasing would be the opposite of
 ## what they asked for.
 @export_range(0.0, 1.0) var flick_hold_alignment: float = 0.6
+## How long the flick must be held CONTINUOUSLY to ask for ONE more turn, in seconds.
+##
+## This IS the double-flip sensitivity, and it is the only thing that sets it.
+##
+## Without this, holding is the DEFAULT and releasing is the effort: a rider throws the flick and
+## their thumb naturally comes to rest at the end of the throw, so the stick is still out when the
+## deck comes round and every trick doubles unless they deliberately snatch it back. That is
+## backwards. A thumb left where it landed is not a request for anything.
+##
+## Each interval of continuous hold buys one more turn, so it reads directly: release inside
+## $0.30\text{s}$ for a single, hold to $0.60$ for a double, $0.90$ for a triple. A natural
+## throw-and-relax has the stick back under flick_min_deflection within roughly $0.1$ to $0.15\text{s}$,
+## so this is comfortably clear of "left my thumb where it landed" without asking the rider to snatch.
+##
+## MUST STAY UNDER ONE REVOLUTION - about $0.44\text{s}$ at the current flip_speed_deg. The deck has
+## to still be turning when the rider finishes asking, or it completes and stops first and doubles
+## become impossible. Slowing the deck widens that ceiling; speeding it up narrows it.
+##
+## It also DECOUPLES double sensitivity from rotation speed. Judged on "still held when the deck
+## arrives", the window to avoid a double was however long a revolution happened to take, so every
+## change to flip_speed_deg silently retuned how easy doubles were. Held time is asked for directly
+## instead, and answered the moment it is earned rather than at whatever instant the deck comes
+## round. Must stay comfortably UNDER one revolution, or the deck completes and stops before the
+## rider can have asked for anything.
+@export var flick_hold_min_time: float = 0.30
 ## Vertical band the releasing stick must be inside, so a flick reads as a flick and not as the
 ## opposite end being loaded instead.
 @export_range(0.0, 0.5) var flick_release_band: float = 0.20
@@ -139,6 +164,9 @@ var flick_held: bool = false
 ## held" can be judged against what the rider actually did rather than against a fixed axis.
 var _flick_dir: Vector2 = Vector2.ZERO
 var _flick_is_left: bool = false
+## Seconds the flick has been held out continuously. Reset the moment it lapses, so a thumb that
+## wanders back through the threshold has to earn the hold again.
+var _flick_held_time: float = 0.0
 ## Recent peak speed of each stick. See flick_speed_decay.
 var _left_flick_peak: float = 0.0
 var _right_flick_peak: float = 0.0
@@ -161,7 +189,7 @@ func _physics_process(delta: float) -> void:
 	if rider == null:
 		return
 	_track_flick_speed(delta)
-	_track_flick_hold()
+	_track_flick_hold(delta)
 	_release_spent_pop_stick()
 	_handle_keyboard_pop()
 	_detect_pop_load_and_flick(delta)
@@ -241,6 +269,7 @@ func _detect_pop_load_and_flick(delta: float) -> void:
 		_load = Vector2.ZERO
 		_flick_dir = Vector2.ZERO
 		flick_held = false
+		_flick_held_time = 0.0
 		trick_status_string = "Grounded & Rolling"
 
 ## Compression follows the thumb up instantly and back down at load_release_rate. Direction stays
@@ -279,13 +308,25 @@ func _release_pop(load_stick: Vector2, left_is_front: bool, reversed_pop: TrickS
 	_build_trick_signature()
 
 ## Watches whether the thrown flick is still being held out in the direction it was thrown.
-func _track_flick_hold() -> void:
+func _track_flick_hold(delta: float) -> void:
 	if current_pop_state != PopState.POPPED or _flick_dir == Vector2.ZERO:
 		flick_held = false
+		_flick_held_time = 0.0
 		return
 	var stick: Vector2 = rider.left_stick_raw if _flick_is_left else rider.right_stick_raw
-	flick_held = stick.length() >= flick_min_deflection \
+	var out: bool = stick.length() >= flick_min_deflection \
 		and stick.normalized().dot(_flick_dir) >= flick_hold_alignment
+	_flick_held_time = _flick_held_time + delta if out else 0.0
+	flick_held = out and _flick_held_time >= flick_hold_min_time
+
+## How many EXTRA turns the rider has asked for by holding, as a count rather than an edge.
+##
+## Declarative on purpose: the controller raises the turn count to match rather than reacting to a
+## moment, so there is no edge to miss and re-asking the same question twice cannot double-count.
+func flick_hold_turns() -> int:
+	if flick_hold_min_time <= 0.0:
+		return 0
+	return int(_flick_held_time / flick_hold_min_time)
 
 ## Peak-holds each stick's speed so a flick is measured by the whole throw rather than by whichever
 ## single frame crossed the release threshold.

@@ -87,10 +87,10 @@ const CASES := [
 	# keyboard pop sets none, and every other case here injects one. Those must take the reference
 	# rate, which is what keeps this whole feature a no-op for the rest of the suite.
 	{"label": "kickflip, hard flick", "pos": Vector3(4.0, 0.078, 14.0),
-		"flip": true, "scoop": 0, "flick_speed": 42.0, "roll_stops_before": 20},
+		"flip": true, "scoop": 0, "flick_speed": 42.0, "roll_stops_before": 24},
 	{"label": "kickflip, lazy flick", "pos": Vector3(4.0, 0.078, 14.0),
 		"flip": true, "scoop": 0, "flick_speed": 3.5, "roll_stops_after": 30},
-	# HELD ROTATION. Keeping the flick out through a completion asks for another turn, and turns are
+	# HELD ROTATION. Each flick_hold_min_time of continuous hold asks for one more turn, and turns are
 	# added in proportion to what the trick STARTED with - so a tre flip doubles both axes and stays
 	# synchronised, where adding a flat turn each would pull it apart. `jump` buys the airtime.
 	#
@@ -98,17 +98,17 @@ const CASES := [
 	# not change at the boundary either: the roll-step cap above already fails a stutter, because
 	# extending is meant to be invisible to the deck's angular velocity.
 	{"label": "double kickflip (held)", "pos": Vector3(4.0, 0.078, 14.0),
-		"flip": true, "scoop": 0, "hold_flick": 25, "jump": 16.0, "expect_turns": 2},
+		"flip": true, "scoop": 0, "hold_flick": 24, "jump": 16.0, "expect_turns": 2},
 	{"label": "triple kickflip (held)", "pos": Vector3(4.0, 0.078, 14.0),
-		"flip": true, "scoop": 0, "hold_flick": 50, "jump": 16.0, "expect_turns": 3},
+		"flip": true, "scoop": 0, "hold_flick": 42, "jump": 16.0, "expect_turns": 3},
 	{"label": "double tre flip (held)", "pos": Vector3(4.0, 0.078, 14.0),
-		"flip": true, "scoop": 360, "hold_flick": 35, "jump": 16.0, "expect_turns": 2, "sync": true},
+		"flip": true, "scoop": 360, "hold_flick": 24, "jump": 16.0, "expect_turns": 2, "sync": true},
 	# A stick that is still DEFLECTED but no longer pointing where it was flicked must stop
 	# sustaining. The rider flicks left and then pushes down - reaching for a manual on the way in -
 	# and that must not read as "keep flipping". Deflection alone cannot tell the two apart; only
 	# alignment can, which is what flick_hold_alignment is for.
 	{"label": "flick then steer away", "pos": Vector3(4.0, 0.078, 14.0),
-		"flip": true, "scoop": 0, "hold_flick": 25, "after_flick": Vector2(0.0, 0.7),
+		"flip": true, "scoop": 0, "hold_flick": 24, "after_flick": Vector2(0.0, 0.7),
 		"jump": 16.0, "expect_turns": 2},
 ]
 

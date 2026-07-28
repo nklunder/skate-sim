@@ -114,8 +114,8 @@ var _travel_axis_sign: float = 1.0
 # variable of its own. Two velocity representations was the split this rewrite removed.
 
 @export_category("Flip & Spin Physics (3-Layer Hierarchy)")
-@export var flip_speed_deg: float = 1020.0
-@export var spin_speed_deg: float = 540.0
+@export var flip_speed_deg: float = 816.0
+@export var spin_speed_deg: float = 432.0
 ## Gyroscopic coupling factor: adds rotational inertia to multi-axis tricks (e.g. 360 flips) so they complete later.
 @export var rotational_complexity_coupling: float = 0.15
 
@@ -132,7 +132,13 @@ var _travel_axis_sign: float = 1.0
 ## Bounds on the multiplier. The FLOOR is the important one: a soft flick should turn the deck
 ## lazily and risk an incomplete trick, not guarantee a primo - the rider should be able to see it
 ## failing and still catch it.
-@export var flick_rate_min: float = 0.6
+##
+## IT IS TIED TO flip_speed_deg, and cannot be tuned independently of it. A flat-ground kickflip has
+## 38 frames of airtime, so the deck must turn at 568 deg/s or better to come round at all - and the
+## slowest a flick can be is flick_rate_min * flip_speed_deg. At 816 that floor is 0.70; anything
+## under it makes a soft flick an unavoidable primo rather than a recoverable mistake. Slow the deck
+## further and this has to rise with it.
+@export var flick_rate_min: float = 0.72
 @export var flick_rate_max: float = 1.6
 ## Where each axis is heading. DERIVED from the turn counts below, never fixed at the pop - see
 ## _refresh_rotation_targets().
@@ -1027,16 +1033,18 @@ func _integrate_flight(delta: float) -> void:
 	# of the deck or returning to the rest pose - which is the same choice the hover()/lower() pair
 	# used to make from inside this block, but made in one place alongside every other foot state.
 	if is_flip_in_progress:
-		# HELD FLICK: another turn, asked for BEFORE the deck arrives rather than after.
+		# HELD FLICK: the rider asks for turns by holding, and the target is raised to match.
 		#
-		# Extending after arrival would work, but move_toward clamps exactly on the target - so the
-		# deck would take a part-step onto it, then a full step away next frame, and the rotation
-		# would stutter once per revolution. Asking while it is still one step out means the target
-		# has already moved by the time it gets there and the angular rate never changes at all,
-		# which is the whole point of holding rather than re-flicking.
-		if trick.flick_held and _rotation_arriving(delta):
-			flip_roll_turns += _roll_turns_per_extend
-			flip_yaw_turns += _yaw_turns_per_extend
+		# DECLARATIVE, not an edge. The count is how many extra turns the hold has earned, so the
+		# target simply tracks it - there is no moment to miss and no way to count the same hold
+		# twice. It also means the extension lands as soon as it is earned, well before the deck
+		# arrives, so move_toward never clamps onto a target that is about to move and the angular
+		# rate never changes: extending is invisible to the deck's velocity, which is the whole point
+		# of holding rather than re-flicking.
+		var asked: int = 1 + trick.flick_hold_turns()
+		if flip_roll_turns < _roll_turns_per_extend * asked:
+			flip_roll_turns = _roll_turns_per_extend * asked
+			flip_yaw_turns = _yaw_turns_per_extend * asked
 			_refresh_rotation_targets()
 		board_mesh.rotation_degrees.z = move_toward(board_mesh.rotation_degrees.z, target_board_roll, absf(flip_roll_rate) * delta)
 		board_mesh.rotation_degrees.y = move_toward(board_mesh.rotation_degrees.y, target_board_yaw, absf(flip_yaw_rate) * delta)
@@ -1169,14 +1177,6 @@ func _deck_clearance_demand() -> float:
 	_deck_clearance_held = maxf(_deck_clearance_held,
 		maxf(0.0, reach * deck_clearance_margin - foot_rig.left_rest.y))
 	return _deck_clearance_held
-
-## True when both axes are within this frame's travel of their targets - i.e. the deck arrives now.
-##
-## Both, not either: the axes are rate-locked to arrive together, and an axis that is not turning has
-## a zero rate and zero distance left, so it reports arriving and lets the turning one decide.
-func _rotation_arriving(delta: float) -> bool:
-	return absf(target_board_roll - board_mesh.rotation_degrees.z) <= absf(flip_roll_rate) * delta \
-		and absf(target_board_yaw - board_mesh.rotation_degrees.y) <= absf(flip_yaw_rate) * delta
 
 ## Rebuilds both rotation targets from the turn counts.
 ##

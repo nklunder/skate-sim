@@ -30,7 +30,7 @@ extends Node3D
 ## Moved here from SkaterController unchanged. Spinning is something the RIDER does - the deck comes
 ## round because it is attached to them, not the other way about - and that is exactly the
 ## distinction this node exists to make.
-@export var body_spin_speed_deg: float = 554.0
+@export var body_spin_speed_deg: float = 443.0
 ## How quickly the shoulders converge on the rate the triggers are asking for. This is the rider's
 ## own rotational inertia: they cannot start or stop turning instantly.
 @export var spin_response: float = 20.0
