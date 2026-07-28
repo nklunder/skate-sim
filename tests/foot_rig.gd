@@ -38,6 +38,12 @@ const CASES := [
 	{"label": "ollie, full pop", "flip": false, "load": 1.0, "min_lift": 0.0, "max_lift": 0.002},
 	{"label": "ollie, gentle pop", "flip": false, "load": 0.45, "min_lift": 0.0, "max_lift": 0.002},
 	{"label": "kickflip, full pop", "flip": true, "load": 1.0, "min_lift": 0.12, "max_lift": 0.25},
+	# A HELD rotation outlasts the leg's tuck, and from that point the deck's clearance demand is the
+	# only thing holding the feet up. It must HOLD, not track the deck's silhouette - that oscillates
+	# twice per revolution, and the feet pumped between 0.001 m and 0.089 m in time with the board.
+	# `max_step` is the assertion: once tucked, no frame may move a foot more than the initial ramp.
+	{"label": "held double kickflip", "flip": true, "load": 1.0, "hold_flick": 40, "jump": 16.0,
+		"speed": 0.0, "min_lift": 0.12, "max_lift": 0.25, "max_step_after_tuck": 0.004},
 ]
 
 const STANCES := [
@@ -64,6 +70,8 @@ var _max_foot_gap: float = 0.0
 var _nan_seen: bool = false
 var _lead_start: RiderInput.Foot = RiderInput.Foot.LEFT
 var _stance_stable: bool = true
+var _max_step_after_tuck: float = 0.0
+var _prev_lift: float = 0.0
 
 func _ready() -> void:
 	_start_case()
@@ -78,10 +86,12 @@ func _start_case() -> void:
 	_skater.global_position = Vector3(20.0, _skater.ride_height, 20.0)
 	# Travel direction is what makes a stance switch rather than forward: the rider is unchanged and
 	# only the way they are going reverses. Setting the velocity is therefore the whole of it.
-	_skater.velocity = Vector3(0.0, 0.0, 7.0 * st["dir"])
+	_skater.velocity = Vector3(0.0, 0.0, float(CASES[_case].get("speed", 7.0)) * st["dir"])
 	_skater.rider.stance = st["stance"]
 	# Silence the device poller so written sticks survive the tick; TrickState still ticks, so the
 	# real gesture recogniser runs and the pop goes through _release_pop() rather than being injected.
+	if CASES[_case].has("jump"):
+		_skater.jump_impulse = float(CASES[_case]["jump"])
 	_skater.rider.set_physics_process(false)
 	_frame = 0
 	_pop_frame = -1
@@ -92,6 +102,8 @@ func _start_case() -> void:
 	_max_foot_gap = 0.0
 	_nan_seen = false
 	_stance_stable = true
+	_max_step_after_tuck = 0.0
+	_prev_lift = 0.0
 
 func _physics_process(_delta: float) -> void:
 	if _reported or _skater == null:
@@ -124,6 +136,8 @@ func _physics_process(_delta: float) -> void:
 	elif _pop_frame >= 0:
 		rider.right_stick_raw = Vector2.ZERO
 		rider.left_stick_raw = Vector2.ZERO
+		if _frame - _pop_frame < int(c.get("hold_flick", 0)):
+			rider.left_stick_raw = Vector2(-0.7, 0.0)
 	rider.left_mag = rider.left_stick_raw.length()
 	rider.right_mag = rider.right_stick_raw.length()
 
@@ -144,12 +158,23 @@ func _physics_process(_delta: float) -> void:
 
 	if _pop_frame > 0:
 		_peak_lift = maxf(_peak_lift, l_lift)
+		# Only while the DECK IS STILL TURNING, and only after the tuck has peaked and settled. The
+		# initial ramp and the release descent are both real motion the rider asked for; what must not
+		# move is the hold in between.
+		if _frame - _pop_frame > 20 and _skater.is_flip_in_progress:
+			_max_step_after_tuck = maxf(_max_step_after_tuck, absf(l_lift - _prev_lift))
+		_prev_lift = l_lift
 		if _land_frame < 0 and _skater.is_grounded and _frame > _pop_frame + 3:
 			_land_frame = _frame
 			_lift_at_land = maxf(absf(l_lift), absf(r_lift))
 			_finish_case()
 	elif _frame > 150:
 		_fail("never popped")
+		_finish_case()
+	if _frame > 400 and not _reported:
+		# Never hang. A case that cannot finish must say so - a suite that stops producing output is
+		# far harder to diagnose than one that fails (AGENTS.md rule 6).
+		_fail("case never completed within 400 frames")
 		_finish_case()
 
 func _fail(msg: String) -> void:
@@ -175,6 +200,8 @@ func _finish_case() -> void:
 		problems.append("feet %.4f m off the deck at touchdown - settle_now() is covering for them" % _lift_at_land)
 	if _grounded_lift > 0.001:
 		problems.append("feet lifted %.4f m while grounded before the pop" % _grounded_lift)
+	if c.has("max_step_after_tuck") and _max_step_after_tuck > float(c["max_step_after_tuck"]):
+		problems.append("feet moved %.4f m in one frame while the deck was turning - the clearance is tracking the board, not held" % _max_step_after_tuck)
 	if _max_foot_gap > 0.004:
 		problems.append("feet diverged by %.4f m - they share one pair of legs" % _max_foot_gap)
 

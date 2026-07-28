@@ -140,17 +140,36 @@ func foot_lift() -> float:
 func tuck(scale: float) -> void:
 	_leg_vel -= tuck_impulse * clampf(scale, 0.0, 1.0)
 
-## Advances the legs one frame. `grounded` clamps them out to standing: a foot cannot sink through
-## the deck it is standing on, and that clamp IS the contact - it is what makes a landing arriving
-## early simply meet the feet rather than needing the animation cut short.
-func solve_legs(delta: float, grounded: bool) -> void:
+## Advances the legs one frame.
+##
+## `grounded` clamps them out to standing: a foot cannot sink through the deck it is standing on, and
+## that clamp IS the contact - it is what makes a landing arriving early simply meet the feet rather
+## than needing the animation cut short.
+##
+## `hold_lift` is the least the rider stays tucked by, in metres, while the deck still needs the
+## room. THE RIDER TUCKS ONCE AND HOLDS IT. They do not pump their knees in time with the board, so
+## this is a floor the legs rest on rather than a target they chase - and when it releases, the legs
+## extend back under their own spring, which is what brings the feet home smoothly instead of in a
+## step.
+##
+## The clearance used to be applied to the SHOES, as the deck's instantaneous silhouette. That is
+## fine while the tuck sits above it and it only fills the tail of a single flip, but a HELD rotation
+## outlasts the tuck - and from then on the silhouette was the only thing lifting the feet, so they
+## pumped between 0.001 m and 0.089 m twice per revolution. It read as the feet and the board
+## fighting each other in mid-air, and as the spin accelerating, which it never did.
+func solve_legs(delta: float, grounded: bool, hold_lift: float = 0.0) -> void:
 	var damping: float = 2.0 * leg_damping_ratio * sqrt(maxf(leg_stiffness, 0.0))
 	_leg_vel += ((stand_height - _leg) * leg_stiffness - _leg_vel * damping) * delta
 	_leg += _leg_vel * delta
 	if grounded and _leg < stand_height:
 		_leg = stand_height
 		_leg_vel = 0.0
-	elif _leg < leg_min:
+		return
+	var held: float = stand_height - maxf(hold_lift, 0.0)
+	if _leg > held:
+		_leg = held
+		_leg_vel = minf(_leg_vel, 0.0)
+	if _leg < leg_min:
 		_leg = leg_min
 		_leg_vel = 0.0
 

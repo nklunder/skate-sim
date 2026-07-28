@@ -160,6 +160,8 @@ var _yaw_turn_dir: float = 0.0
 ## STARTED with, so extending doubles then triples it - which is what keeps flip and scoop
 ## synchronised through a held rotation. Adding a flat one turn per axis would break the ratio that
 ## makes them arrive together, and a double tre flip would come apart.
+## Peak-held clearance the turning deck demands - see _deck_clearance_demand().
+var _deck_clearance_held: float = 0.0
 var _roll_turns_per_extend: int = 0
 var _yaw_turns_per_extend: int = 0
 ## Signed deg/s imparted to the deck at the pop, then held constant - airborne there is no torque on
@@ -253,6 +255,8 @@ var _since_push: float = 1000.0
 ## now scales with speed on its own: at 7 m/s you get +/-21 deg, at 3 m/s +/-56 deg, and at or below
 ## this value any angle is survivable - including a full 90 deg.
 @export var max_landing_slide: float = 2.5
+## Fraction over the deck's WIDEST reach that the rider holds their feet clear by while it turns.
+@export var deck_clearance_margin: float = 1.08
 ## Fastest the DIRECTION OF TRAVEL may swing while realigning after a landing, in degrees per second.
 ##
 ## Full grip on the first grounded frame turned travel by the whole residual in a single tick while
@@ -772,15 +776,11 @@ func _physics_process(delta: float) -> void:
 	# than where they now are.
 	# The rider's legs advance BEFORE the feet are posed, because the feet are the end of the legs.
 	# Grounded clamps them out to standing, so a landing arriving early simply meets the feet.
-	rider_body.solve_legs(delta, is_grounded)
+	rider_body.solve_legs(delta, is_grounded, _deck_clearance_demand())
 	_recover_landing_dip(delta)
 	_foot_frame.is_grounded = is_grounded
 	_foot_frame.deck_is_spinning = is_flip_in_progress
 	_foot_frame.foot_lift = rider_body.foot_lift()
-	# The deck's own silhouette: how far it reaches above its long axis as it turns over. The feet
-	# are held clear of THIS, so a rolling deck can never pass through a shoe no matter how the
-	# rider's legs happen to be behaving.
-	_foot_frame.deck_reach = deck_half_width * absf(sin(board_mesh.rotation.z))
 	foot_rig.solve(delta, _foot_frame, rider, camera_pivot.rotation.y, board_pivot.rotation.y)
 	camera_pivot.follow(delta)
 
@@ -1145,6 +1145,30 @@ func _flick_rate_scale(flick_speed: float) -> float:
 		return 1.0
 	var ratio: float = flick_speed / flick_reference_speed
 	return clampf(1.0 + (ratio - 1.0) * flick_rate_sensitivity, flick_rate_min, flick_rate_max)
+
+## How far the rider must stay tucked for a TURNING deck to clear their feet, in metres.
+##
+## A PEAK-HOLD of the deck's silhouette: it rises as the deck rolls toward edge-on and then never
+## falls back while the deck is still turning. Both halves matter, and each fixes a different bug.
+##
+##   RISING is what keeps the pop smooth. Jumping straight to the deck's widest reach the instant it
+##   starts turning stepped the feet 8.9 cm in a single frame - the deck is flat at that moment and
+##   needs no room at all.
+##   HOLDING is what stops the feet shaking. The raw silhouette oscillates twice per revolution, and
+##   once a held rotation outlasts the leg's tuck that oscillation is the ONLY thing moving the feet,
+##   so they pumped between 0.001 m and 0.089 m in time with the board. A rider tucks once and holds
+##   it; they do not pump their knees to the beat of their own board.
+##
+## Released the moment the deck stops turning, so the legs extend and bring the feet home under their
+## own spring rather than in a step.
+func _deck_clearance_demand() -> float:
+	if not is_flip_in_progress:
+		_deck_clearance_held = 0.0
+		return 0.0
+	var reach: float = deck_half_width * absf(sin(board_mesh.rotation.z))
+	_deck_clearance_held = maxf(_deck_clearance_held,
+		maxf(0.0, reach * deck_clearance_margin - foot_rig.left_rest.y))
+	return _deck_clearance_held
 
 ## True when both axes are within this frame's travel of their targets - i.e. the deck arrives now.
 ##

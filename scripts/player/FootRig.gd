@@ -89,11 +89,6 @@ enum FootState {
 ## the start and thrusts back at the finish.
 @export var push_sweep: float = 0.15
 
-## Fraction over the deck's own silhouette the feet are held clear by, when the deck's rotation is
-## what is driving them. Multiplicative rather than an added margin, deliberately: it has to vanish
-## as the deck comes flat, or a resting board would hold the feet permanently off its own griptape.
-@export var deck_clearance_margin: float = 1.08
-
 ## Longest step the spring is integrated over. A semi-implicit Euler spring goes unstable once the
 ## step approaches its period, and a frame hitch would otherwise fire the shoes off the board.
 ## Clamping means a long frame animates in slow motion for one tick, which nobody will ever see.
@@ -185,11 +180,6 @@ class Frame extends RefCounted:
 	var is_grounded: bool = true
 	## True while the deck is rotating under the rider - the feet must be clear of it.
 	var deck_is_spinning: bool = false
-	## How far the ROLLING DECK reaches above its own long axis this frame, in metres. Zero for a flat
-	## deck, greatest edge-on. The feet may never be below this, whatever else they are doing - it is
-	## the deck's silhouette, so it is what makes an intersection impossible by construction rather
-	## than by tuning.
-	var deck_reach: float = 0.0
 	## How far the rider has pulled their feet up off the deck this frame, in metres, straight from
 	## RiderBody.foot_lift(). The rig does not decide it and cannot: it is the output of the rider's
 	## legs, which is the whole point - the feet now MOVE for a reason instead of tracing a path.
@@ -281,8 +271,12 @@ func solve(delta: float, frame: Frame, rider: RiderInput, camera_yaw: float,
 		#
 		# The floor cannot lift the feet off a flat deck: reach is zero at zero roll, so an ollie is
 		# untouched by it and the ollie rule survives whatever the leg is doing.
+		# The LEG is the single source of foot height. The deck's clearance requirement is fed into
+		# RiderBody as a tuck the legs HOLD - see solve_legs() - rather than applied here as a
+		# parallel floor. Applied here it tracked the deck's INSTANTANEOUS silhouette, which
+		# oscillates twice per revolution, so any rotation outlasting the tuck made the feet pump in
+		# time with the board.
 		var lift: float = frame.foot_lift if _feet_released else 0.0
-		lift = maxf(lift, frame.deck_reach * deck_clearance_margin - ch.rest_position.y)
 		ch.node.position = ch.pose_position + Vector3(0.0, maxf(0.0, lift), 0.0)
 		ch.node.rotation = ch.pose_rotation
 	_drive_ankle_pegs(step, rider, camera_yaw, board_yaw)
