@@ -118,8 +118,28 @@ var _travel_axis_sign: float = 1.0
 @export var spin_speed_deg: float = 540.0
 ## Gyroscopic coupling factor: adds rotational inertia to multi-axis tricks (e.g. 360 flips) so they complete later.
 @export var rotational_complexity_coupling: float = 0.15
+## Where each axis is heading. DERIVED from the turn counts below, never fixed at the pop - see
+## _refresh_rotation_targets().
 var target_board_roll: float = 0.0
 var target_board_yaw: float = 0.0
+## Rest-periods each axis has been asked to turn through, and the orientation and direction it
+## started from. Roll rests every 360 deg (griptape up again); yaw rests every 180 (a deck half a
+## turn round is the same deck).
+##
+## THE TURN COUNT IS THE IRREDUCIBLE STATE, and it is the reason held rotation is a one-line
+## extension rather than a rewrite. Geometry alone cannot say when a trick is over: a 360 scoop
+## passes THROUGH a resting orientation at 180, and stopping there would be wrong. How many turns
+## were asked for is rider intent, not something the deck's angle can be asked about. Expressing the
+## target as `rest + period * turns * direction` keeps that intent in one growable number, while the
+## RATE stays constant and independent of it - so asking for another turn costs nothing and
+## re-derives nothing. Fixing an absolute target at the pop is what made "keep spinning while held"
+## impossible without moving a goalpost that four other systems were keyed to.
+var flip_roll_turns: int = 0
+var flip_yaw_turns: int = 0
+var _roll_rest_at_pop: float = 0.0
+var _yaw_rest_at_pop: float = 0.0
+var _roll_turn_dir: float = 0.0
+var _yaw_turn_dir: float = 0.0
 ## Signed deg/s imparted to the deck at the pop, then held constant - airborne there is no torque on
 ## the board, so constant angular velocity is the physically correct integration.
 ##
@@ -911,24 +931,30 @@ func _execute_pop() -> void:
 	# again mid-settle would otherwise bake the few unsettled degrees in permanently, and every
 	# later trick would inherit the error. When the deck is already at rest - the normal case -
 	# rounding is a no-op and the target is unchanged.
-	var roll_rest: float = _nearest_multiple(board_mesh.rotation_degrees.z, 360.0)
-	var yaw_rest: float = _nearest_multiple(board_mesh.rotation_degrees.y, 180.0)
+	_roll_rest_at_pop = _nearest_multiple(board_mesh.rotation_degrees.z, 360.0)
+	_yaw_rest_at_pop = _nearest_multiple(board_mesh.rotation_degrees.y, 180.0)
 	if sig.flip == TrickSignature.Flip.KICK:
-		target_board_roll = roll_rest + (360.0 * flip_roll_sign())
+		_roll_turn_dir = flip_roll_sign()
+		flip_roll_turns = 1
 		is_flip_in_progress = true
 	elif sig.flip == TrickSignature.Flip.HEEL:
-		target_board_roll = roll_rest - (360.0 * flip_roll_sign())
+		_roll_turn_dir = -flip_roll_sign()
+		flip_roll_turns = 1
 		is_flip_in_progress = true
 	else:
-		target_board_roll = roll_rest
+		_roll_turn_dir = 0.0
+		flip_roll_turns = 0
 
-	# Spin magnitude comes from the measured signature, never from the display name.
+	# Spin magnitude comes from the measured signature, never from the display name. Counted in
+	# HALF-turns, because that is what the deck actually rests at: a 360 scoop is two of them.
 	if sig.scoop_deg != 0:
-		var spin_deg: float = 360.0 if absi(sig.scoop_deg) == 360 else 180.0
-		target_board_yaw = yaw_rest + (spin_deg * trick.last_scoop_sign)
+		_yaw_turn_dir = trick.last_scoop_sign
+		flip_yaw_turns = 2 if absi(sig.scoop_deg) == 360 else 1
 		is_flip_in_progress = true
 	else:
-		target_board_yaw = yaw_rest
+		_yaw_turn_dir = 0.0
+		flip_yaw_turns = 0
+	_refresh_rotation_targets()
 
 	# The flip loop now owns BoardMesh; any settle still running is superseded by it.
 	if is_flip_in_progress:
@@ -1061,6 +1087,20 @@ func _impart_deck_rotation(sig: TrickSignature) -> void:
 		return
 	flip_roll_rate = roll_sweep / trick_time
 	flip_yaw_rate = yaw_sweep / trick_time
+
+## Rebuilds both rotation targets from the turn counts.
+##
+## Targets are a CONSEQUENCE of how many turns the rider has asked for, not a number decided at the
+## pop. Raising a turn count and calling this is the whole of "keep spinning" - the rate is untouched,
+## so the deck simply takes longer to arrive rather than speeding up to hit a moved goalpost.
+##
+## Built off the RESTING orientation the trick started from, not the raw angle: popping again
+## mid-settle would otherwise bake the few unsettled degrees in permanently and every later trick
+## would inherit the error. When the deck is already at rest - the normal case - that rounding is a
+## no-op and the target is unchanged.
+func _refresh_rotation_targets() -> void:
+	target_board_roll = _roll_rest_at_pop + 360.0 * float(flip_roll_turns) * _roll_turn_dir
+	target_board_yaw = _yaw_rest_at_pop + 180.0 * float(flip_yaw_turns) * _yaw_turn_dir
 
 ## Rotates a late-caught deck onto its resting orientation at the flip's own angular rate.
 ##
