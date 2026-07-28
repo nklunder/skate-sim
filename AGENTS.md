@@ -136,13 +136,17 @@
 ## ⚠️ Critical Technical Notes & Architectural Rules
 
 1. **🧭 RIG FRAMES — never hand-roll an orientation sign. Use the conversion layer.**
-   - The rig has three frames, each adding one piece of orientation to the one above it. **Every** conversion between them lives in the `RIG FRAMES` block in `SkaterController.gd` and nowhere else:
+   - The rig has four frames. `SkaterRoot` carries the world heading, and **two sibling chains** hang beneath it — the rider and the board — because they are two bodies, not one. **Every** conversion between them lives in the `RIG FRAMES` block in `SkaterController.gd` and nowhere else:
 
      | frame | adds | consumed by |
      |---|---|---|
      | `SkaterRoot` | world heading + landing residuals | `_board_axis`, steering, camera, position |
-     | `BoardPivot` | the rider's $0/180^\circ$ switch-stance flip | trick pitch, manuals, feet, stance facts |
+     | `RiderTorso` | the **rider's** yaw — shoulders, body spin | `pivot_reversed()`, i.e. switch/fakie |
+     | `BoardPivot` | the **board's** yaw + manual pitch | trick pitch, manuals, feet, stance facts |
      | `BoardMesh` | the deck's own flip roll + shuv yaw | roll targets, nose/tail identity |
+
+   - **Rule — `RiderTorso` and `BoardPivot` are SIBLINGS, and the feet stay under `BoardPivot`.** Keeping the feet in the deck's frame is what makes switch/fakie mirroring *inherited* rather than compensated for; only the torso separates. That is also the anatomy — feet on the board, shoulders free, twist in between. `BoardPivot`'s yaw previously carried the rider's 0/180 switch flip **and** their accumulated body spin with no way to tell them apart, which is why a boardslide (deck across the direction of travel, rider still facing near-forward) was not expressible: the rider *was* the board.
+   - **Rule — being switch is a fact about the RIDER, so `pivot_reversed()` reads `RiderTorso`.** It means the person's body faces the opposite way down the line they are travelling. It read `BoardPivot` only because the rider had no frame of their own. The two coincide while the coupling is rigid and stop coinciding the moment a slide turns the deck across the rider. **Anything constructing a landed body-180 must set BOTH frames** — setting only the board describes a deck spun underneath a motionless rider, which is a boardslide, not switch stance.
 
    - **The API:** `leading_axle_z()` / `trailing_axle_z()` (BoardPivot-local Z of each end), `stance_sign()` (rider-relative pitch → local X), `rider_pitch_deg()` (the inverse read-back), `pivot_reversed()`, `pivot_z_to_rig()`, `deck_reversed()`, `flip_roll_sign()`.
    - **Rule — solve RIDER-relative, convert once at the assignment.** Write pitch logic as "positive means trailing-end-down" and multiply by `stance_sign()` in the single line that writes `board_pivot.rotation_degrees.x`. Never branch on `left_is_front` inline.

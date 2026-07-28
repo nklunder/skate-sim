@@ -116,7 +116,6 @@ var _travel_axis_sign: float = 1.0
 @export_category("Flip & Spin Physics (3-Layer Hierarchy)")
 @export var flip_speed_deg: float = 1020.0
 @export var spin_speed_deg: float = 540.0
-@export var body_spin_speed_deg: float = 554.0
 ## Gyroscopic coupling factor: adds rotational inertia to multi-axis tricks (e.g. 360 flips) so they complete later.
 @export var rotational_complexity_coupling: float = 0.15
 var target_board_roll: float = 0.0
@@ -129,7 +128,6 @@ var target_board_yaw: float = 0.0
 ## stopped spinning and kept flipping, then halted - see AGENTS.md.
 var flip_roll_rate: float = 0.0
 var flip_yaw_rate: float = 0.0
-var current_aerial_spin_rate: float = 0.0
 var is_flip_in_progress: bool = false
 ## True while the deck is rotating the last few degrees onto its resting orientation after a late
 ## catch. Landing must never teleport the deck flat - an instant snap of up to a full catch cone is
@@ -158,6 +156,7 @@ var pop_riding_reversed: bool = false
 ## channel would corrupt manuals, wheel-bite detection and pops. CameraPivot stays on SkaterRoot so
 ## the chase camera does not roll with the ramp.
 @onready var surface_align: Node3D = $SurfaceAlign
+@onready var rider_body: RiderBody = $SurfaceAlign/RiderTorso
 @onready var board_pivot: Node3D = $SurfaceAlign/BoardPivot
 @onready var board_mesh: Node3D = $SurfaceAlign/BoardPivot/BoardMesh
 ## The rider's feet and every animation that moves them. Presentation only - see FootRig.gd, and
@@ -476,13 +475,25 @@ func _board_axis() -> Vector3:
 # RIG FRAMES - every orientation conversion in the project, and nowhere else.
 #
 # THE recurring bug class here (BUG_ARCHIVE #4, #6) is a quantity measured in one frame being used
-# in another. The rig has three, each adding one piece of orientation to the one above it:
+# in another. The rig has four. SkaterRoot carries the world heading, and TWO SIBLING CHAINS hang
+# beneath it - the rider and the board - because they are two bodies, not one:
 #
 #   frame        adds                                   consumed by
 #   ----------   ------------------------------------   ----------------------------------------
 #   SkaterRoot   world heading + landing residuals       _board_axis, steering, camera, position
-#   BoardPivot   the rider's 0/180 switch-stance flip    trick pitch, manuals, feet, stance facts
+#   RiderTorso   the RIDER's yaw - shoulders, spin       pivot_reversed, i.e. switch/fakie
+#   BoardPivot   the BOARD's yaw + manual pitch          trick pitch, manuals, feet, stance facts
 #   BoardMesh    the deck's own flip roll + shuv yaw     roll targets, nose/tail identity
+#
+# RiderTorso and BoardPivot are SIBLINGS, deliberately. The feet stay under BoardPivot - that is
+# what makes switch/fakie mirroring inherited rather than compensated for - and only the torso
+# separates, which is also the anatomy: feet on the board, shoulders free, twist in between.
+#
+# BoardPivot's yaw used to carry the rider's 0/180 switch flip AND their accumulated body spin, with
+# no way to tell them apart. A boardslide needs the deck 90 deg across the direction of travel while
+# the rider still faces near-forward, and that is not expressible while the rider IS the board.
+# While the coupling is rigid the two frames move together and every previous figure is reproduced
+# exactly; softening the torsion between them is what lets a slide happen.
 #
 # TrickSignature.gd does exactly this for the two rotation-NAMING frames, and its conversions are
 # the only sign logic in this project that has never regressed. This is the same medicine applied
@@ -528,13 +539,20 @@ func stance_sign() -> float:
 func rider_pitch_deg() -> float:
 	return board_pivot.rotation_degrees.x * stance_sign()
 
-## True while BoardPivot sits half a turn out of phase with the rig: all of switch and fakie, plus
+## True while the RIDER sits half a turn out of phase with the rig: all of switch and fakie, plus
 ## anything after a landed body 180 (_evaluate_touchdown_landing parks the nearest multiple of 180
-## on the pivot and hands only the remainder to the rig).
+## on both frames and hands only the remainder to the rig).
 ##
 ## A statement about FRAMES, not about where the rider is going - see the block comment above.
+##
+## Reads the RIDER's frame, not the board's. Being switch is a fact about the person: it means their
+## body faces the opposite way down the line they are travelling. It was previously read off
+## BoardPivot only because the rider had no frame of their own to read - the board carried the
+## rider's 0/180 flip along with its own yaw, and the two were indistinguishable. They coincide
+## while the coupling is rigid, so this is the same answer today; it stops being the same answer the
+## moment a slide turns the deck across the rider, which is exactly the case this split exists for.
 func pivot_reversed() -> bool:
-	return cos(board_pivot.rotation.y) < 0.0
+	return cos(rider_body.rotation.y) < 0.0
 
 ## Carries a BoardPivot-local Z into the rig's frame.
 ##
@@ -909,13 +927,20 @@ func _integrate_flight(delta: float) -> void:
 	vertical_velocity -= gravity_accel * delta
 	global_position.y += vertical_velocity * delta
 
-	# Layer 1: Aerial Body & Deck Spin Authority (FS/BS 180s/360s via triggers with fluid momentum smoothing)
-	# Applied to board_pivot.y so rolling travel vector and chase camera stay fixed behind the skater!
-	var target_spin: float = rider.lean * body_spin_speed_deg
-	current_aerial_spin_rate = lerpf(current_aerial_spin_rate, target_spin, 20.0 * delta)
-	if abs(current_aerial_spin_rate) > 0.1:
-		board_pivot.rotation_degrees.y -= current_aerial_spin_rate * delta
-		airborne_body_yaw_deg -= current_aerial_spin_rate * delta
+	# Layer 1: Aerial Body Spin (FS/BS 180s/360s via triggers, with the rider's own rotational inertia)
+	#
+	# The RIDER turns and the board is carried round with them, rather than the deck being spun and
+	# the rider inferred from it. That is the physically true direction, and it is what lets the two
+	# come apart later: a boardslide puts the deck across the direction of travel while the rider
+	# still faces near-forward, which is not expressible while one of them IS the other.
+	#
+	# THE COUPLING IS RIGID HERE, on purpose. The board takes the shoulders' delta in full, so this
+	# reproduces the previous behaviour exactly, down to the last decimal - the torsion spring that
+	# will let them diverge is introduced afterwards, on its own, where it can be felt and judged.
+	var turned: float = rider_body.advance_spin(rider.lean, delta)
+	if turned != 0.0:
+		board_pivot.rotation_degrees.y += turned
+		airborne_body_yaw_deg += turned
 
 	# Layer 2: Mid-Air Pitch Control (0.20 to 1.00 thumbsticks to angle nose/tail in air)
 	_apply_airborne_board_pitch(delta)
@@ -949,7 +974,7 @@ func _integrate_flight(delta: float) -> void:
 		is_grounded = true
 		if landing_dip_ref_speed > 0.0:
 			_landing_dip = minf(impact / landing_dip_ref_speed, 1.0) * landing_dip_max
-		current_aerial_spin_rate = 0.0
+		rider_body.halt_spin()
 		trick.current_pop_state = TrickState.PopState.NONE
 		_evaluate_touchdown_landing()
 
@@ -1187,6 +1212,14 @@ func _evaluate_touchdown_landing() -> void:
 	var rest_yaw: float = _nearest_multiple(board_pivot.rotation_degrees.y, 180.0)
 	rotate_y(deg_to_rad(board_pivot.rotation_degrees.y - rest_yaw))
 	board_pivot.rotation_degrees.y = fmod(rest_yaw, 360.0)
+	# The rider's frame is resolved the same way and at the same instant. Only the REMAINDER went to
+	# the rig above, so the shoulders keep the half-turn that makes the rider switch - but they must
+	# not keep the whole spin, or every trick ever landed accumulates into the torso for good.
+	# Rounded independently rather than copied from the board: the two differ by the deck's own
+	# lateral pop yaw (up to lateral_pop_yaw_deg), which is the board kicking out, not the rider
+	# turning, and it must not leak into the rider's frame.
+	rider_body.rotation_degrees.y = fmod(
+		_nearest_multiple(rider_body.rotation_degrees.y, 180.0), 360.0)
 	# Nothing is handed to the camera here any more. It tracks the direction of TRAVEL, which does
 	# not jump at touchdown - only the rig's heading does - so there is no discontinuity to absorb.
 

@@ -1,4 +1,4 @@
-[gd_scene load_steps=14 format=3]
+[gd_scene load_steps=15 format=3]
 
 [ext_resource type="Script" path="res://scripts/player/SkaterController.gd" id="1_controller"]
 [ext_resource type="Script" path="res://scripts/input/RiderInput.gd" id="2_input"]
@@ -8,6 +8,7 @@
 [ext_resource type="Script" path="res://scripts/player/ChaseCamera.gd" id="5_chase_camera"]
 [ext_resource type="Script" path="res://scripts/player/FootRig.gd" id="6_foot_rig"]
 [ext_resource type="Script" path="res://scripts/player/ShoeMesh.gd" id="7_shoe_mesh"]
+[ext_resource type="Script" path="res://scripts/player/RiderBody.gd" id="9_rider_body"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_foot"]
 size = Vector3(0.231, 0.038, 0.098)
@@ -43,6 +44,9 @@ board_config = ExtResource("3_config")
 script = ExtResource("8_trick")
 
 [node name="SurfaceAlign" type="Node3D" parent="."]
+
+[node name="RiderTorso" type="Node3D" parent="SurfaceAlign"]
+script = ExtResource("9_rider_body")
 
 [node name="BoardPivot" type="Node3D" parent="SurfaceAlign"]
 

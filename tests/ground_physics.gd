@@ -66,7 +66,7 @@ var _rest_off_centre: float = 0.0
 
 # slope: gradient in degrees for a bespoke slab spawned at x=20, z=20, downhill toward +Z.
 #   Fall-line acceleration is G*sin(t)*cos(t), so friction (1.0) holds anything under ~3.6 deg.
-# land_yaw: board_pivot yaw forced through the whole flight, i.e. the heading the rider lands at.
+# land_yaw: rider + board yaw forced through the whole flight, i.e. the heading the rider lands at.
 # speed: initial rolling speed. +Z on a slope case is downhill, -Z is uphill.
 const CASES := [
 	{"label": "flat: coasts to a stop", "speed": 3.0, "settle": 240, "expect_stopped": true},
@@ -238,6 +238,8 @@ func _run_landing_case(c: Dictionary) -> void:
 	_prev_board_yaw = bw
 	if not _skater.is_grounded:
 		_skater.board_pivot.rotation_degrees.y = c["land_yaw"]
+		# The rider turns with the board through a body-180; see the note in carve_and_push.
+		_skater.rider_body.rotation_degrees.y = c["land_yaw"]
 		return
 	if not _landed:
 		_landed = true

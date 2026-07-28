@@ -128,7 +128,12 @@ func _start_case() -> void:
 	_turned = 0.0
 	_prev_heading = _skater.rotation_degrees.y
 	if CASES[_case].has("pivot_yaw"):
+		# A landed body-180 turns the RIDER and the board together, so both frames carry it. Setting
+		# only the board would describe a deck spun 180 underneath a rider who never moved - which is
+		# a boardslide, not switch stance, and would leave pivot_reversed() reading the rider's frame
+		# a half-turn out from the board's.
 		_skater.board_pivot.rotation_degrees.y = float(CASES[_case]["pivot_yaw"])
+		_skater.rider_body.rotation_degrees.y = float(CASES[_case]["pivot_yaw"])
 	_lead_axle_start = _axle_world(-1.0)
 	_trail_axle_start = _axle_world(1.0)
 	_lead_axle_drift = 0.0
@@ -155,6 +160,7 @@ func _physics_process(delta: float) -> void:
 			return
 		if _air_frames > 5 and not _skater.is_grounded:
 			_skater.board_pivot.rotation_degrees.y = c["land_yaw"]
+			_skater.rider_body.rotation_degrees.y = c["land_yaw"]
 			return
 		if _air_frames > 5 and _skater.is_grounded:
 			_landed = true
