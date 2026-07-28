@@ -46,6 +46,25 @@ enum PopState { NONE, LOADING_OLLIE, LOADING_NOLLIE, POPPED }
 @export_range(0.1, 1.0) var scoop_min_deflection: float = 0.30
 ## Sweep that must accumulate before the scoop's DIRECTION is trusted. Below this the sign is noise.
 @export var scoop_direction_min_deg: float = 15.0
+## How fast a loaded tail springs back once the thumb starts coming home, in stick units per second.
+##
+## THE COMPRESSION IS PHYSICAL STATE, not a live readout of the thumb, and that distinction is the
+## whole fix for flip tricks failing intermittently. A rider pops by flicking the OPPOSITE stick, so
+## both thumbs are moving at once and the loading one is often already on its way back when the
+## flick lands. Impulse was read live at that instant, which made pop height a function of thumb
+## SYNCHRONISATION rather than of how hard the rider actually loaded:
+##
+##     load stick at flick   1.00   0.70   0.40   0.10   0.00
+##     jump height (m)       0.80   0.80   0.19   0.01   0.00  <- board never leaves the ground
+##
+## About two frames of timing separated a full ollie from nothing, and the trick still REGISTERED -
+## the deck flipped, the name resolved - it simply had no height. That is what "sometimes it just
+## doesn't pop" is.
+##
+## Physically the tail is already compressed by the time the flick happens; letting go of the stick
+## does not uncompress it instantly. At 2.5 a full load stays worth a full pop for ~7 frames and
+## survives as a load at all for ~19, so a flick thrown any time in that window pops as asked.
+@export var load_release_rate: float = 2.5
 
 @export_category("Directional Pop")
 ## Horizontal deflection inside which a pop goes dead straight, for gap consistency.
@@ -87,6 +106,10 @@ var last_pop: TrickSignature.Pop = TrickSignature.Pop.OLLIE
 var current_trick: TrickSignature = TrickSignature.new()
 var last_scoop_sign: float = -1.0
 var max_swept_angle: float = 0.0
+## The tail's live compression, as a stick vector. Magnitude is REMEMBERED and bleeds back at
+## load_release_rate; direction tracks the thumb, so gliding the foot across the tail's pockets
+## still aims the pop in real time. This, not `rider.back_stick()`, is what a pop is measured from.
+var _load: Vector2 = Vector2.ZERO
 var _accumulated_scoop_deg: float = 0.0
 var _last_frame_scoop_angle: float = 0.0
 var last_combo_string: String = "None"
@@ -102,12 +125,12 @@ func _ready() -> void:
 	if rider == null:
 		push_warning("TrickState: parent is not a RiderInput; no trick will ever be recognised.")
 
-func _physics_process(_delta: float) -> void:
+func _physics_process(delta: float) -> void:
 	if rider == null:
 		return
 	_release_spent_pop_stick()
 	_handle_keyboard_pop()
-	_detect_pop_load_and_flick()
+	_detect_pop_load_and_flick(delta)
 
 ## Spacebar fallback for keyboard jumping, with Z (Kickflip) / X (Heelflip) / C (Shove-it).
 func _handle_keyboard_pop() -> void:
@@ -124,7 +147,7 @@ func _handle_keyboard_pop() -> void:
 	last_pop = TrickSignature.Pop.OLLIE
 	_build_trick_signature()
 
-func _detect_pop_load_and_flick() -> void:
+func _detect_pop_load_and_flick(delta: float) -> void:
 	if current_pop_state == PopState.POPPED:
 		return # Wait for SkaterController touchdown to reset state
 
@@ -139,6 +162,10 @@ func _detect_pop_load_and_flick() -> void:
 		# Nollie / Switch Nollie Load (Leading front foot pushed up in upper hemisphere)
 		elif front.length() >= manual_zone_min and front.y <= -manual_zone_min:
 			_begin_load(PopState.LOADING_NOLLIE, front, "Loading Nollie (Nose)")
+
+	# Track the tail's compression, which follows the thumb DOWN more slowly than the thumb moves.
+	if current_pop_state != PopState.NONE:
+		_track_compression(back if current_pop_state == PopState.LOADING_OLLIE else front, delta)
 
 	# Measure total angular sweep (arc span) and true rotational direction via frame delta
 	# accumulation, to prevent circle-wrap bugs when a sweep passes 180 deg.
@@ -159,22 +186,41 @@ func _detect_pop_load_and_flick() -> void:
 	# Execute Flick Pop from loaded states.
 	if current_pop_state == PopState.LOADING_OLLIE \
 			and front.length() >= flick_min_deflection and front.y <= flick_release_band:
-		_release_pop(back, left_is_front, TrickSignature.Pop.SWITCH_OLLIE, TrickSignature.Pop.OLLIE)
+		_release_pop(_load, left_is_front, TrickSignature.Pop.SWITCH_OLLIE, TrickSignature.Pop.OLLIE)
 	elif current_pop_state == PopState.LOADING_NOLLIE \
 			and back.length() >= flick_min_deflection and back.y >= -flick_release_band:
-		_release_pop(front, left_is_front, TrickSignature.Pop.FAKIE_OLLIE, TrickSignature.Pop.NOLLIE)
+		_release_pop(_load, left_is_front, TrickSignature.Pop.FAKIE_OLLIE, TrickSignature.Pop.NOLLIE)
 
-	# Reset to NONE if the sticks return to neutral without ever flicking.
+	# Reset to NONE if the sticks return to neutral without ever flicking - AND the tail has actually
+	# sprung back. The compression clause is not belt-and-braces: throwing a flick takes a few frames,
+	# and on a slower throw the loading thumb crosses the deadzone before the flicking one reaches it.
+	# Both sticks are then briefly under manual_zone_min on the same frame, and without this the load
+	# was dropped mid-gesture and the pop never happened at all. A rider who is still compressed has
+	# not abandoned anything.
 	if rider.right_stick_raw.length() < manual_zone_min \
 			and rider.left_stick_raw.length() < manual_zone_min \
+			and _load.length() < manual_zone_min \
 			and current_pop_state != PopState.NONE:
 		current_pop_state = PopState.NONE
 		pop_impulse_scale = 1.0
 		max_swept_angle = 0.0
+		_load = Vector2.ZERO
 		trick_status_string = "Grounded & Rolling"
+
+## Compression follows the thumb up instantly and back down at load_release_rate. Direction stays
+## live so the pocket the foot is in still aims the pop, while the magnitude - which is what the
+## impulse is measured from - remembers the load the rider actually achieved.
+func _track_compression(active: Vector2, delta: float) -> void:
+	var live: float = active.length()
+	var mag: float = maxf(live, _load.length() - load_release_rate * delta)
+	var dir: Vector2 = active.normalized() if live > 0.05 else _load.normalized()
+	if dir == Vector2.ZERO:
+		dir = Vector2.DOWN
+	_load = dir * mag
 
 func _begin_load(state: PopState, stick: Vector2, heavy_label: String) -> void:
 	current_pop_state = state
+	_load = stick
 	trick_status_string = heavy_label if stick.length() >= pop_load_threshold else "Manual / Ledge Prep"
 	_last_frame_scoop_angle = rad_to_deg(stick.angle())
 	_accumulated_scoop_deg = 0.0
@@ -188,6 +234,7 @@ func _release_pop(load_stick: Vector2, left_is_front: bool, reversed_pop: TrickS
 	pop_impulse_scale = _calculate_pop_impulse_scale(load_stick.length())
 	pop_lateral_impulse_ratio = _calculate_lateral_pop_ratio(load_stick.x)
 	pop_load_spent = true
+	_load = Vector2.ZERO
 	current_pop_state = PopState.POPPED
 	# Switch vs regular is the rider's PROFILE stance against their live orientation, so a goofy
 	# rider riding left-foot-forward is in switch exactly as a regular rider riding right-foot-forward.

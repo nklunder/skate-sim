@@ -1,0 +1,181 @@
+extends Node
+
+## Regression suite for the POP GESTURE - the load-then-flick sequence, driven through the real
+## input chain rather than injected.
+##
+## Written because a reported bug ("sometimes the input sequence feels like it should result in a
+## completed trick, but the board never leaves the ground") was invisible to every existing suite.
+## `curb_flip_repro` sets `pop_impulse_triggered` directly, so it never runs `_release_pop()` at all;
+## the other three never pop from a gesture. The entire recogniser was untested.
+##
+## THE BUG, for the record. A rider pops by flicking the OPPOSITE stick, so both thumbs move at
+## once and the loading one is usually already on its way home when the flick lands. Impulse was
+## read LIVE from the load stick at that instant, which made pop height a function of thumb
+## synchronisation rather than of how hard the rider loaded:
+##
+##     load stick at flick   1.00   0.70   0.40   0.10   0.00
+##     jump height (m)       0.80   0.80   0.19   0.01   0.00   <- never leaves the ground
+##
+## Roughly two frames of timing separated a full ollie from nothing, and the trick still REGISTERED -
+## the deck flipped, the name resolved - it simply had no height. A second, rarer failure had the
+## same face: on a slow flick throw the loading thumb crossed the deadzone before the flicking one
+## reached it, both sticks were briefly under `manual_zone_min` on the same frame, and the reset
+## clause dropped the load mid-gesture so no pop happened at all.
+##
+## Both are fixed by treating the tail's compression as PHYSICAL STATE with a spring-back rate
+## rather than as a live readout of the thumb. The cases below pin that from both sides: the
+## forgiveness must be real, and it must not swallow the graded low-pop response it sits on top of.
+##
+## Run: godot --headless --path . res://tests/pop_gesture.tscn
+
+const TEST_WORLD := preload("res://scenes/TestWorld.tscn")
+
+# hold        steady deflection the rider settles at before flicking
+# pre         optional harder load held for the first 10 frames, then eased to `hold`
+# wait        frames spent at `hold` before the flick is thrown
+# flick_over  frames the flick takes to travel out (a slow throw is the second failure mode)
+# min_h/max_h bounds on jump height in metres
+const CASES := [
+	# The reported failure. The thumb is already home when the flick lands; the rider loaded fully,
+	# so they must get a full pop.
+	{"label": "full load, thumb home at flick", "pre": 1.0, "hold": 0.0, "wait": 0,
+		"flick_over": 2.0, "min_h": 0.70, "max_h": 0.90},
+	# The second failure. A slow throw used to drop the load mid-gesture and pop not at all.
+	#
+	# The bound is deliberately NOT full height. Releasing the load outright and then taking 12
+	# frames to throw the flick is a sloppy input, and the tail has been springing back for all of
+	# it - losing some pop is the honest answer and the whole point of a release RATE rather than a
+	# latch. What is pinned here is that the gesture survives and produces a real pop: no cliff, and
+	# never zero. Timing is forgiven, not made free.
+	{"label": "full load, slow flick throw", "pre": 1.0, "hold": 0.0, "wait": 0,
+		"flick_over": 12.0, "min_h": 0.30, "max_h": 0.90},
+	# Forgiveness must not swallow the graded response underneath it.
+	{"label": "steady gentle hold", "hold": 0.45, "wait": 0, "flick_over": 2.0,
+		"min_h": 0.005, "max_h": 0.10},
+	{"label": "steady light hold (ledge drop)", "hold": 0.25, "wait": 0, "flick_over": 2.0,
+		"min_h": 0.0, "max_h": 0.01},
+	# The compression must SPRING BACK, not latch. A rider who loads hard, eases off and then sits
+	# there has let the tail up; flicking later is a gentle pop, not a stored full one.
+	{"label": "full load, eased off, flicked late", "pre": 1.0, "hold": 0.30, "wait": 30,
+		"flick_over": 2.0, "min_h": 0.0, "max_h": 0.06},
+]
+
+const STANCES := [
+	{"label": "regular", "stance": RiderInput.Stance.REGULAR},
+	{"label": "goofy", "stance": RiderInput.Stance.GOOFY},
+]
+
+var _world: Node3D = null
+var _skater: SkaterController = null
+var _frame: int = 0
+var _case: int = 0
+var _stance: int = 0
+var _failures: int = 0
+var _reported: bool = false
+
+var _pop_frame: int = -1
+var _peak: float = 0.0
+var _y0: float = 0.0
+var _scale: float = -1.0
+var _dropped: bool = false
+
+func _ready() -> void:
+	_start_case()
+
+func _start_case() -> void:
+	if _world != null:
+		_world.queue_free()
+	_world = TEST_WORLD.instantiate()
+	add_child(_world)
+	_skater = _world.get_node("SkaterRig") as SkaterController
+	_skater.global_position = Vector3(20.0, _skater.ride_height, 20.0)
+	_skater.velocity = Vector3(0.0, 0.0, -7.0)
+	_skater.rider.stance = STANCES[_stance]["stance"]
+	# Silence the poller so written sticks survive; TrickState still ticks, so the pop goes through
+	# the real recogniser and _release_pop() rather than being injected.
+	_skater.rider.set_physics_process(false)
+	_frame = 0
+	_pop_frame = -1
+	_peak = 0.0
+	_scale = -1.0
+	_dropped = false
+	_y0 = _skater.global_position.y
+
+func _physics_process(_delta: float) -> void:
+	if _reported or _skater == null:
+		return
+	_frame += 1
+	var c: Dictionary = CASES[_case]
+	var rider: RiderInput = _skater.rider
+	var flick_at: int = 12 + int(c["wait"])
+
+	if _pop_frame < 0:
+		var held: float = float(c["hold"])
+		if c.has("pre") and _frame <= 10:
+			held = float(c["pre"])
+		var back_is_right: bool = rider.leading_foot == RiderInput.Foot.LEFT
+		var load := Vector2(0.0, held)
+		var flick := Vector2.ZERO
+		if _frame >= flick_at:
+			var t: float = clampf(float(_frame - flick_at + 1) / float(c["flick_over"]), 0.0, 1.0)
+			flick = Vector2(-0.7 * t, 0.0)
+		if back_is_right:
+			rider.right_stick_raw = load
+			rider.left_stick_raw = flick
+		else:
+			rider.left_stick_raw = load
+			rider.right_stick_raw = flick
+	else:
+		rider.right_stick_raw = Vector2.ZERO
+		rider.left_stick_raw = Vector2.ZERO
+	rider.left_mag = rider.left_stick_raw.length()
+	rider.right_mag = rider.right_stick_raw.length()
+
+	# A load dropped back to NONE after the gesture began is the second failure mode.
+	if _frame > 12 and _pop_frame < 0 and _skater.trick.current_pop_state == TrickState.PopState.NONE:
+		_dropped = true
+
+	if _pop_frame < 0 and _skater.trick.current_pop_state == TrickState.PopState.POPPED:
+		_pop_frame = _frame
+		_scale = _skater.trick.pop_impulse_scale
+
+	if _pop_frame > 0:
+		_peak = maxf(_peak, _skater.global_position.y - _y0)
+		if _frame > _pop_frame + 45:
+			_finish_case()
+	elif _frame > 140:
+		_finish_case()
+
+func _finish_case() -> void:
+	var c: Dictionary = CASES[_case]
+	var st: Dictionary = STANCES[_stance]
+	var problems: Array[String] = []
+
+	if _pop_frame < 0:
+		problems.append("never popped - the gesture was lost entirely")
+	else:
+		if _dropped:
+			problems.append("load dropped to NONE mid-gesture before the flick landed")
+		if _peak < float(c["min_h"]):
+			problems.append("height %.3f below %.3f - loaded but got no pop for it" % [_peak, c["min_h"]])
+		if _peak > float(c["max_h"]):
+			problems.append("height %.3f above %.3f - more pop than the rider asked for" % [_peak, c["max_h"]])
+
+	var ok: bool = problems.is_empty()
+	print("%-34s %-8s %s | scale %.2f | height %.3f m" % [
+		c["label"], st["label"], "PASS" if ok else "FAIL", _scale, _peak])
+	for p in problems:
+		_failures += 1
+		print("      -> %s" % p)
+
+	_stance += 1
+	if _stance >= STANCES.size():
+		_stance = 0
+		_case += 1
+	if _case >= CASES.size():
+		_reported = true
+		var total: int = CASES.size() * STANCES.size()
+		print("\n%d/%d passed" % [total - _failures, total])
+		get_tree().quit()
+		return
+	_start_case()
