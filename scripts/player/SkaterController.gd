@@ -118,6 +118,7 @@ var _travel_axis_sign: float = 1.0
 @export var spin_speed_deg: float = 540.0
 ## Gyroscopic coupling factor: adds rotational inertia to multi-axis tricks (e.g. 360 flips) so they complete later.
 @export var rotational_complexity_coupling: float = 0.15
+
 ## Where each axis is heading. DERIVED from the turn counts below, never fixed at the pop - see
 ## _refresh_rotation_targets().
 var target_board_roll: float = 0.0
@@ -791,12 +792,15 @@ func _update_grounded_state() -> void:
 ## a skater stalling to a stop keeps the direction they were rolling rather than snapping to the
 ## rig's static forward.
 func _update_travel_axis_sign() -> void:
-	var flat_vel := Vector2(velocity.x, velocity.z)
-	if flat_vel.length() <= travel_min_speed:
-		return
+	# Measured ALONG THE WHEELS, not on total speed. Gating on total speed and then reading a tiny
+	# along-axis component let motion that was almost entirely SIDEWAYS set which way the rider is
+	# travelling: a standing directional pop leaps perpendicular to the deck at over 1 m/s, clearing
+	# any speed gate, while the along-axis component is near zero and its sign is noise. That fed
+	# leading_foot, which fed the kickturn axle, and the board pivoted on the wrong truck after
+	# landing. Same mistake the chase camera made with its heading, in a second consumer.
 	var axis: Vector3 = _board_axis()
 	var along: float = Vector3(velocity.x, 0.0, velocity.z).dot(axis)
-	if absf(along) > 0.01:
+	if absf(along) > travel_min_speed:
 		_travel_axis_sign = 1.0 if along >= 0.0 else -1.0
 
 ## Hands FootInputState the geometry it needs to work out which foot is leading, and which end of
@@ -817,7 +821,7 @@ func _update_travel_axis_sign() -> void:
 ## rider at all - read the deck's real orientation rather than inferring it from the rider's stance.
 func _update_stance_facts() -> void:
 	rider.update_stance_facts(board_pivot, foot_rig.left_rest, foot_rig.right_rest,
-		Vector3(velocity.x, 0.0, velocity.z), self, _travel_axis_sign, deck_reversed())
+		self, _travel_axis_sign, deck_reversed())
 
 ## Step 2. Push impulses from the face buttons (latched inputs ensure zero missed taps).
 func _apply_push_inputs() -> void:
@@ -895,7 +899,12 @@ func _execute_pop() -> void:
 		# The deck kicking out under a directional pop is a twist between rider and board, so it winds
 		# the torsion rather than being written straight onto the board's yaw. Written the old way it
 		# would be a yaw the coupling never agreed to, and the torsion would quietly undo it.
-		rider_body.wind_twist(-trick.pop_lateral_impulse_ratio * lateral_pop_yaw_deg)
+		#
+		# MIND THE SIGN. wind_twist() records how far the board is AHEAD of the rider, and relaxing
+		# that twist is what turns the deck - so the board ends up moving by MINUS the wound amount.
+		# Winding by -ratio (the direction the deck should end up going) therefore kicked it the wrong
+		# way, and no suite caught it because none of them pops laterally.
+		rider_body.wind_twist(trick.pop_lateral_impulse_ratio * lateral_pop_yaw_deg)
 		trick.pop_lateral_impulse_ratio = 0.0
 
 	airborne_body_yaw_deg = 0.0
@@ -1087,6 +1096,7 @@ func _impart_deck_rotation(sig: TrickSignature) -> void:
 		return
 	flip_roll_rate = roll_sweep / trick_time
 	flip_yaw_rate = yaw_sweep / trick_time
+
 
 ## Rebuilds both rotation targets from the turn counts.
 ##

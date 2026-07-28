@@ -110,6 +110,7 @@ var max_swept_angle: float = 0.0
 ## load_release_rate; direction tracks the thumb, so gliding the foot across the tail's pockets
 ## still aims the pop in real time. This, not `rider.back_stick()`, is what a pop is measured from.
 var _load: Vector2 = Vector2.ZERO
+
 var _accumulated_scoop_deg: float = 0.0
 var _last_frame_scoop_angle: float = 0.0
 var last_combo_string: String = "None"

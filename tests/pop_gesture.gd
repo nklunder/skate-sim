@@ -54,6 +54,24 @@ const CASES := [
 		"min_h": 0.005, "max_h": 0.10},
 	{"label": "steady light hold (ledge drop)", "hold": 0.25, "wait": 0, "flick_over": 2.0,
 		"min_h": 0.0, "max_h": 0.01},
+	# THE DIRECTIONAL POP. Popping from a standstill with the foot in a side pocket leaps the rider
+	# over a metre per second STRAIGHT SIDEWAYS. That is nearly perpendicular to the deck, so anything
+	# deriving a heading from raw velocity gets noise - leading_foot flipped mid-flight, and since it
+	# picks the kickturn axle the board came down pivoting on the wrong truck. Invisible to every
+	# suite until now, and the third time this class of bug has bitten (chase camera heading, travel
+	# axis sign, and this). Also pins the direction the deck kicks, which a sign inversion in the
+	# torsion routing reversed with nothing to catch it.
+	{"label": "left pocket pop, stationary", "hold": 1.0, "wait": 0, "flick_over": 2.0,
+		"speed": 0.0, "pocket_x": -0.56, "expect_yaw_sign": 1.0, "min_h": 0.60, "max_h": 0.90},
+	{"label": "right pocket pop, stationary", "hold": 1.0, "wait": 0, "flick_over": 2.0,
+		"speed": 0.0, "pocket_x": 0.56, "expect_yaw_sign": -1.0, "min_h": 0.60, "max_h": 0.90},
+	# The same pop with the deck's kick-out yaw DISABLED, which is the case that actually pins the
+	# stance derivation. With the kick present, travel is a hair off perpendicular and the fore/aft
+	# dot-product comparison breaks in the deck's favour by luck; at zero it is a true tie and a
+	# stance read from raw velocity is a coin flip. Deriving it from the along-axis sign instead is
+	# what makes it deterministic, and this is the case that fails without it.
+	{"label": "lateral pop, no deck kick", "hold": 1.0, "wait": 0, "flick_over": 2.0,
+		"speed": 0.0, "pocket_x": -0.56, "lateral_yaw": 0.0, "min_h": 0.60, "max_h": 0.90},
 	# The compression must SPRING BACK, not latch. A rider who loads hard, eases off and then sits
 	# there has let the tail up; flicking later is a gentle pop, not a stored full one.
 	{"label": "full load, eased off, flicked late", "pre": 1.0, "hold": 0.30, "wait": 30,
@@ -78,6 +96,13 @@ var _peak: float = 0.0
 var _y0: float = 0.0
 var _scale: float = -1.0
 var _dropped: bool = false
+var _lead_before: RiderInput.Foot = RiderInput.Foot.LEFT
+var _axle_before: float = 0.0
+## STICKY. A flip that happens mid-flight and recovers on landing is still a flip - the board pivots
+## on the wrong truck for as long as it lasts, and sampling only the final state misses it entirely.
+var _lead_flipped: bool = false
+var _axle_flipped: bool = false
+var _peak_yaw: float = 0.0
 
 func _ready() -> void:
 	_start_case()
@@ -89,8 +114,10 @@ func _start_case() -> void:
 	add_child(_world)
 	_skater = _world.get_node("SkaterRig") as SkaterController
 	_skater.global_position = Vector3(20.0, _skater.ride_height, 20.0)
-	_skater.velocity = Vector3(0.0, 0.0, -7.0)
+	_skater.velocity = Vector3(0.0, 0.0, -float(CASES[_case].get("speed", 7.0)))
 	_skater.rider.stance = STANCES[_stance]["stance"]
+	if CASES[_case].has("lateral_yaw"):
+		_skater.lateral_pop_yaw_deg = float(CASES[_case]["lateral_yaw"])
 	# Silence the poller so written sticks survive; TrickState still ticks, so the pop goes through
 	# the real recogniser and _release_pop() rather than being injected.
 	_skater.rider.set_physics_process(false)
@@ -99,6 +126,9 @@ func _start_case() -> void:
 	_peak = 0.0
 	_scale = -1.0
 	_dropped = false
+	_lead_flipped = false
+	_axle_flipped = false
+	_peak_yaw = 0.0
 	_y0 = _skater.global_position.y
 
 func _physics_process(_delta: float) -> void:
@@ -114,7 +144,7 @@ func _physics_process(_delta: float) -> void:
 		if c.has("pre") and _frame <= 10:
 			held = float(c["pre"])
 		var back_is_right: bool = rider.leading_foot == RiderInput.Foot.LEFT
-		var load := Vector2(0.0, held)
+		var load := Vector2(float(c.get("pocket_x", 0.0)), held)
 		var flick := Vector2.ZERO
 		if _frame >= flick_at:
 			var t: float = clampf(float(_frame - flick_at + 1) / float(c["flick_over"]), 0.0, 1.0)
@@ -132,6 +162,9 @@ func _physics_process(_delta: float) -> void:
 	rider.right_mag = rider.right_stick_raw.length()
 
 	# A load dropped back to NONE after the gesture began is the second failure mode.
+	if _frame == 3:
+		_lead_before = rider.leading_foot
+		_axle_before = _skater.trailing_axle_z()
 	if _frame > 12 and _pop_frame < 0 and _skater.trick.current_pop_state == TrickState.PopState.NONE:
 		_dropped = true
 
@@ -141,6 +174,12 @@ func _physics_process(_delta: float) -> void:
 
 	if _pop_frame > 0:
 		_peak = maxf(_peak, _skater.global_position.y - _y0)
+		if absf(_skater.board_pivot.rotation_degrees.y) > absf(_peak_yaw):
+			_peak_yaw = _skater.board_pivot.rotation_degrees.y
+		if rider.leading_foot != _lead_before:
+			_lead_flipped = true
+		if signf(_skater.trailing_axle_z()) != signf(_axle_before):
+			_axle_flipped = true
 		if _frame > _pop_frame + 45:
 			_finish_case()
 	elif _frame > 140:
@@ -160,6 +199,13 @@ func _finish_case() -> void:
 			problems.append("height %.3f below %.3f - loaded but got no pop for it" % [_peak, c["min_h"]])
 		if _peak > float(c["max_h"]):
 			problems.append("height %.3f above %.3f - more pop than the rider asked for" % [_peak, c["max_h"]])
+		if _lead_flipped:
+			problems.append("leading_foot flipped during the trick - the kickturn axle swaps with it")
+		if _axle_flipped:
+			problems.append("trailing axle sign flipped during the trick - board pivots on the wrong truck")
+		if c.has("expect_yaw_sign") and signf(_peak_yaw) != float(c["expect_yaw_sign"]):
+			problems.append("deck kicked the wrong way: peak board yaw %+.2f, expected sign %+.0f"
+				% [_peak_yaw, float(c["expect_yaw_sign"])])
 
 	var ok: bool = problems.is_empty()
 	print("%-34s %-8s %s | scale %.2f | height %.3f m" % [

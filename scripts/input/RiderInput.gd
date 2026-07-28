@@ -136,7 +136,7 @@ func _classify_push_strokes() -> void:
 ##
 ## `deck_reversed` is whether the DECK ITSELF is currently turned 180 deg from its resting
 ## orientation - see the nose/tail note below.
-func update_stance_facts(pivot: Node3D, left_rest: Vector3, right_rest: Vector3, vel: Vector3,
+func update_stance_facts(pivot: Node3D, left_rest: Vector3, right_rest: Vector3,
 		root: Node3D = null, travel_axis_sign: float = 1.0, deck_reversed: bool = false) -> void:
 	# NOSE and TAIL are fixed attributes of the BOARD, and are not the same question as leading and
 	# trailing. Land a shove-it and the deck has turned 180 deg underneath a rider who has not moved:
@@ -160,8 +160,16 @@ func update_stance_facts(pivot: Node3D, left_rest: Vector3, right_rest: Vector3,
 	# irrelevant here - a board rolls equally well either way round. Rest offsets are rotated into
 	# world space by the pivot's basis, which is exactly what (foot.global_position -
 	# pivot.global_position) evaluated to back when the live nodes were read.
+	#
+	# Taken from `travel_axis_sign` - which way along the ROLLING AXIS the rider is going - and never
+	# from the raw velocity vector. The feet are mounted fore and aft, so a travel direction with a
+	# large sideways component dots to nearly zero against both of them and the comparison below is
+	# decided by noise. A standing directional pop is exactly that: over 1 m/s straight sideways.
+	# leading_foot would flip mid-flight, and since it picks the kickturn axle the board came down
+	# pivoting on the wrong truck. The sign already holds through low speed, so it is also the right
+	# answer when stopped.
 	var forward_source: Node3D = root if root != null else pivot.get_parent()
-	var travel_dir: Vector3 = vel.normalized() if vel.length_squared() > 0.05 else -forward_source.global_transform.basis.z * travel_axis_sign
+	var travel_dir: Vector3 = -forward_source.global_transform.basis.z * travel_axis_sign
 	var basis: Basis = pivot.global_transform.basis
 	if (basis * left_rest).dot(travel_dir) > (basis * right_rest).dot(travel_dir):
 		leading_foot = Foot.LEFT
