@@ -89,6 +89,11 @@ enum FootState {
 ## the start and thrusts back at the finish.
 @export var push_sweep: float = 0.15
 
+## Fraction over the deck's own silhouette the feet are held clear by, when the deck's rotation is
+## what is driving them. Multiplicative rather than an added margin, deliberately: it has to vanish
+## as the deck comes flat, or a resting board would hold the feet permanently off its own griptape.
+@export var deck_clearance_margin: float = 1.08
+
 ## Longest step the spring is integrated over. A semi-implicit Euler spring goes unstable once the
 ## step approaches its period, and a frame hitch would otherwise fire the shoes off the board.
 ## Clamping means a long frame animates in slow motion for one tick, which nobody will ever see.
@@ -169,6 +174,11 @@ class Frame extends RefCounted:
 	var is_grounded: bool = true
 	## True while the deck is rotating under the rider - the feet must be clear of it.
 	var deck_is_spinning: bool = false
+	## How far the ROLLING DECK reaches above its own long axis this frame, in metres. Zero for a flat
+	## deck, greatest edge-on. The feet may never be below this, whatever else they are doing - it is
+	## the deck's silhouette, so it is what makes an intersection impossible by construction rather
+	## than by tuning.
+	var deck_reach: float = 0.0
 	## How far the rider has pulled their feet up off the deck this frame, in metres, straight from
 	## RiderBody.foot_lift(). The rig does not decide it and cannot: it is the output of the rider's
 	## legs, which is the whole point - the feet now MOVE for a reason instead of tracing a path.
@@ -234,7 +244,28 @@ func solve(delta: float, frame: Frame, rider: RiderInput, camera_yaw: float,
 		# produced the tuck, and the shoe's spring then lagged behind it. The lag cost 16 mm of
 		# clearance in the first frames of a flip - while the deck was turning fastest - and the
 		# board passed through the shoe. A foot is the end of a leg; it does not chase it.
-		ch.node.position = ch.pose_position + Vector3(0.0, frame.foot_lift, 0.0)
+		#
+		# THE FEET ONLY LEAVE THE DECK WHEN THE DECK NEEDS THE ROOM. In a real ollie the feet never
+		# come off: the board is dragged up BY the front foot, so tucking the knees raises the
+		# rider's HIPS while the feet stay planted and the deck rises with them. Feet release only
+		# to let the deck turn over underneath. So the leg's tuck reaches the shoes only while the
+		# deck is actually rotating - on a plain ollie, or any trick with no flip and no shuv, the
+		# feet stay in contact for the whole jump, which is what a rider would tell you they do.
+		#
+		# This gate is why leg_stiffness is sized against the ROTATION and not against airtime: the
+		# tuck must be spent by the time the deck stops turning, or handing the feet back would be a
+		# step change in their height.
+		# The tuck, and then the floor the deck itself imposes. Taking the greater of the two is what
+		# makes this one motion rather than two: the leg is above the floor for most of a flip, so
+		# what you see is a single smooth tuck, and the floor only takes over at the end - where the
+		# leg has spent itself but the deck is still coming round. It carries the feet down to
+		# exactly zero as the deck arrives flat, which is why handing them back needs no blend.
+		#
+		# The floor cannot lift the feet off a flat deck: reach is zero at zero roll, so an ollie is
+		# untouched by it and the ollie rule survives whatever the leg is doing.
+		var lift: float = frame.foot_lift if frame.deck_is_spinning else 0.0
+		lift = maxf(lift, frame.deck_reach * deck_clearance_margin - ch.rest_position.y)
+		ch.node.position = ch.pose_position + Vector3(0.0, maxf(0.0, lift), 0.0)
 		ch.node.rotation = ch.pose_rotation
 	_drive_ankle_pegs(step, rider, camera_yaw, board_yaw)
 

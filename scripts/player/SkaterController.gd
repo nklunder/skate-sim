@@ -735,6 +735,10 @@ func _physics_process(delta: float) -> void:
 	_foot_frame.is_grounded = is_grounded
 	_foot_frame.deck_is_spinning = is_flip_in_progress
 	_foot_frame.foot_lift = rider_body.foot_lift()
+	# The deck's own silhouette: how far it reaches above its long axis as it turns over. The feet
+	# are held clear of THIS, so a rolling deck can never pass through a shoe no matter how the
+	# rider's legs happen to be behaving.
+	_foot_frame.deck_reach = deck_half_width * absf(sin(board_mesh.rotation.z))
 	foot_rig.solve(delta, _foot_frame, rider, camera_pivot.rotation.y, board_pivot.rotation.y)
 	camera_pivot.follow(delta)
 

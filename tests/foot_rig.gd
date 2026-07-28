@@ -7,13 +7,14 @@ extends Node
 ## back to itself. The invariants below are about the rider's legs driving the shoes, which is a
 ## property worth pinning:
 ##
-##   TUCK ON EVERY POP.  This hole has now been dug twice, in two different mechanisms, and both
-##                       times it went unnoticed because nothing was watching. The apex catch-stomp
-##                       could not move a foot that had never left the deck, and the parabola that
-##                       replaced it was parameterised on FLIP progress - so a straight ollie, which
-##                       has no flip to be a progress of, lifted the feet by exactly zero for the
-##                       whole jump. A tuck now hangs off the POP, and this asserts it.
-##   EFFORT SCALES.      A gentle ledge-drop pop must not tuck like a full one.
+##   THE OLLIE RULE.     A plain ollie - no flip, no shuv - keeps the feet ON the deck for the whole
+##                       jump. In a real ollie the board is dragged up BY the front foot, so tucking
+##                       the knees raises the rider's HIPS while the feet stay planted and the board
+##                       rises with them. Feet release only to let the deck turn over underneath.
+##                       Asserted at two pop strengths, because release is a question of whether the
+##                       deck is rotating and never of how hard the rider popped.
+##   ENOUGH TO CLEAR.    When the deck IS turning, the feet must be clear of it before it gets
+##                       edge-on - the tuck is sized against the rotation, not against airtime.
 ##   FEET COME HOME.     The shoes must reach the deck by touchdown under their own dynamics, not be
 ##                       rescued by settle_now(). An animation still travelling at touchdown is one
 ##                       the landing is covering for.
@@ -29,9 +30,14 @@ const TEST_WORLD := preload("res://scenes/TestWorld.tscn")
 # load: how hard the pop stick is held, which sets pop_impulse_scale and so the tuck effort.
 # min_lift / max_lift: bounds on peak foot lift in metres, the assertion that effort scales.
 const CASES := [
-	{"label": "ollie, full pop", "flip": false, "load": 1.0, "min_lift": 0.12, "max_lift": 0.25},
+	# THE OLLIE RULE. A plain ollie - no flip, no shuv - must keep the feet on the deck for the whole
+	# jump. The board is dragged up BY the front foot in a real ollie, so tucking the knees raises the
+	# rider's hips while the feet stay planted and the board rises with them. Feet release only to let
+	# the deck turn over. Asserted at both loads, because the release is a question of whether the
+	# deck is rotating and never of how hard the pop was.
+	{"label": "ollie, full pop", "flip": false, "load": 1.0, "min_lift": 0.0, "max_lift": 0.002},
+	{"label": "ollie, gentle pop", "flip": false, "load": 0.45, "min_lift": 0.0, "max_lift": 0.002},
 	{"label": "kickflip, full pop", "flip": true, "load": 1.0, "min_lift": 0.12, "max_lift": 0.25},
-	{"label": "gentle pop (ledge drop)", "flip": false, "load": 0.45, "min_lift": 0.0, "max_lift": 0.06},
 ]
 
 const STANCES := [
@@ -160,9 +166,11 @@ func _finish_case() -> void:
 	if not _stance_stable:
 		problems.append("leading_foot changed mid-trick")
 	if _peak_lift < float(c["min_lift"]):
-		problems.append("peak lift %.3f below %.3f - the rider did not tuck" % [_peak_lift, c["min_lift"]])
+		problems.append("peak lift %.3f below %.3f - not clear of a deck that is turning" % [_peak_lift, c["min_lift"]])
 	if _peak_lift > float(c["max_lift"]):
-		problems.append("peak lift %.3f above %.3f - tuck did not scale with pop effort" % [_peak_lift, c["max_lift"]])
+		var why: String = "the feet left a deck that was not turning" if float(c["max_lift"]) < 0.01 \
+			else "tucked further than the rotation calls for"
+		problems.append("peak lift %.3f above %.3f - %s" % [_peak_lift, c["max_lift"], why])
 	if _lift_at_land > 0.004:
 		problems.append("feet %.4f m off the deck at touchdown - settle_now() is covering for them" % _lift_at_land)
 	if _grounded_lift > 0.001:

@@ -46,14 +46,15 @@ extends Node3D
 ## a hard enough pop would fold the rider through their own hips.
 @export var leg_min: float = 0.55
 ## How hard the legs pull back toward standing once tucked. Sets the RECOVERY TIME, and it is sized
-## against AIRTIME rather than picked for its own sake: the tuck has to outlast the deck's rotation,
-## or the feet come home while the board is still turning and it clips straight through them.
-@export var leg_stiffness: float = 30.0
-## Well under 1.0. This is not styling - it is what makes the tuck a broad hump that HOLDS the feet
-## clear rather than a spike that peaks and immediately decays. Measured at k = 30: the legs rise,
-## stay above the deck's edge-on reach for ~17 frames, and arrive back at standing right as the
-## board does. Overshoot past standing is invisible, since foot_lift() floors at zero - the feet
-## cannot be pushed through the deck by the leg ringing.
+## against THE DECK'S ROTATION rather than against airtime. Two things have to be true at once: the
+## tuck must outlast the rotation, or the board comes round into feet that have already returned;
+## and it must be spent BY the time the rotation ends, because that is the moment the feet take the
+## deck back (see FootRig's composition). A tuck still standing at that instant would be a step
+## change in foot height - a snap - which is the "levitate, then stomp" failure in a new costume.
+@export var leg_stiffness: float = 80.0
+## Well under 1.0, which is what makes the tuck a broad hump that HOLDS the feet clear rather than a
+## spike that peaks and decays. Overshoot past standing is invisible, since foot_lift() floors at
+## zero - a ringing leg cannot push a foot through the deck.
 @export_range(0.0, 2.0) var leg_damping_ratio: float = 0.3
 ## Retraction speed given to the legs at the pop, in metres per second, at FULL pop impulse.
 ##
@@ -63,7 +64,7 @@ extends Node3D
 ## motion. Everything downstream then follows for free: it scales with how hard the pop was, an
 ## early landing simply meets the feet on the way, and a straight ollie tucks without a special case
 ## because this hangs off the POP rather than off a flip that may not exist.
-@export var tuck_impulse: float = 1.35
+@export var tuck_impulse: float = 2.15
 
 ## Signed deg/s the shoulders are currently turning at.
 var spin_rate_deg: float = 0.0
