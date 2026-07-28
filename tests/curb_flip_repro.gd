@@ -58,15 +58,15 @@ const CASES := [
 	# Sketchy but rideable: deck is ~36 deg short, inside the cone, so the settle runs several
 	# frames. This is the case that actually exercises the no-teleport guarantee.
 	{"label": "kickflip -> 0.43m ledge", "pos": Vector3(20.0, 0.078, 6.0), "ledge": 0.43,
-		"flip": true, "shuv": 0, "expect": "Landed Kickflip!"},
+		"flip": true, "shuv": 0, "expect": "Landed Kickflip!", "flip_speed": 608.0},
 	{"label": "kickflip -> 0.43m, manual", "pos": Vector3(20.0, 0.078, 6.0), "ledge": 0.43,
-		"flip": true, "shuv": 0, "expect": "Landed directly into Manual!", "hold_manual": true},
+		"flip": true, "shuv": 0, "expect": "Landed directly into Manual!", "hold_manual": true, "flip_speed": 608.0},
 	# Past the cone: deck arrives ~56 deg over, foot would slide off the rail. Must still bail.
 	{"label": "kickflip -> 0.55m ledge", "pos": Vector3(20.0, 0.078, 6.0), "ledge": 0.55,
-		"flip": true, "shuv": 0, "expect": "BAIL! (Primo Crash / Incomplete Flip)"},
+		"flip": true, "shuv": 0, "expect": "BAIL! (Primo Crash / Incomplete Flip)", "flip_speed": 608.0},
 	# Deck arrives ~213 deg round - genuinely upside down. Must still bail.
 	{"label": "kickflip -> 0.8m platform", "pos": Vector3(-10.0, 0.078, -10.0),
-		"flip": true, "shuv": 0, "expect": "BAIL! (Primo Crash / Incomplete Flip)"},
+		"flip": true, "shuv": 0, "expect": "BAIL! (Primo Crash / Incomplete Flip)", "flip_speed": 608.0},
 	# Combined-axis tricks: the sync assertion. Both axes must stop turning on the same frame.
 	# No exact name is asserted - these inject a signature directly, so the resolved name is
 	# TrickNames' business and would make this suite fail for unrelated naming changes. Landing at
@@ -104,6 +104,8 @@ func _start_case() -> void:
 		_spawn_ledge(CASES[_case]["ledge"])
 	_skater = _world.get_node("SkaterRig") as SkaterController
 	_skater.global_position = CASES[_case]["pos"]
+	if CASES[_case].has("flip_speed"):
+		_skater.flip_speed_deg = CASES[_case]["flip_speed"]
 	# Set the vector directly: current_speed is read-only, precisely so nothing can assign a speed
 	# and have a direction silently inferred for it.
 	_skater.velocity = -_skater.global_transform.basis.z * 7.0

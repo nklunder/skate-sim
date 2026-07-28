@@ -40,6 +40,7 @@ enum FootState {
 	RIDING, ## Standing on the deck at the rest pose.
 	PUSHING, ## Mid push stroke - the one grounded animation that takes a foot off its rest.
 	HOVERING, ## Lifted clear of a deck spinning underneath.
+	STOMPING, ## Mid-air catch stomp - snapping down onto the revolving deck.
 }
 
 @export_category("Spring")
@@ -101,6 +102,7 @@ class Channel extends RefCounted:
 	var state: FootRig.FootState = FootRig.FootState.RIDING
 	## Seconds since this foot entered its current state. The only clock any animation needs.
 	var phase_time: float = 0.0
+	var stomp_delay: float = 0.0
 	var target_position: Vector3 = Vector3.ZERO
 	var target_rotation: Vector3 = Vector3.ZERO
 	var _vel_position: Vector3 = Vector3.ZERO
@@ -182,10 +184,20 @@ func start_push(foot: RiderInput.Foot) -> bool:
 func settle_now() -> void:
 	for ch in [_left, _right]:
 		ch.state = FootState.RIDING
+		ch.stomp_delay = 0.0
 		ch.phase_time = 0.0
 		ch.target_position = ch.rest_position
 		ch.target_rotation = ch.rest_rotation
 		ch.snap()
+
+## Executes a mid-air catch stomp when deck rotation completes or a manual catch is triggered.
+## On single-axis flips or shuvs, first_foot stomps instantly and the second foot follows after 0.08 s.
+## On dual_stomp (straight Ollies/Nollies), both feet stomp together.
+func execute_catch_stomp(first_foot: RiderInput.Foot, dual_stomp: bool) -> void:
+	for ch in [_left, _right]:
+		var is_first: bool = dual_stomp or ((ch == _left) == (first_foot == RiderInput.Foot.LEFT))
+		ch.stomp_delay = 0.0 if is_first else 0.08
+		ch.enter(FootState.STOMPING)
 
 ## Poses both feet for this frame. The single entry point, called from SkaterController's pipeline.
 ##
@@ -206,14 +218,18 @@ func solve(delta: float, frame: Frame, rider: RiderInput, camera_yaw: float,
 func _advance_states(delta: float, frame: Frame) -> void:
 	for ch in [_left, _right]:
 		ch.phase_time += delta
+		if ch.stomp_delay > 0.0:
+			ch.stomp_delay = maxf(0.0, ch.stomp_delay - delta)
 		if not frame.is_grounded and frame.deck_is_spinning:
 			# Highest priority: the deck is turning over underneath, so the feet get out of its way
 			# whatever else they were doing. A push stroke caught by a pop is simply abandoned - a
 			# rider cannot keep kicking at the ground once the board has left it.
 			ch.enter(FootState.HOVERING)
 		elif ch.state == FootState.HOVERING:
-			ch.enter(FootState.RIDING)
+			ch.enter(FootState.STOMPING)
 		elif ch.state == FootState.PUSHING and ch.phase_time >= push_anim_duration:
+			ch.enter(FootState.RIDING)
+		elif ch.state == FootState.STOMPING and frame.is_grounded:
 			ch.enter(FootState.RIDING)
 
 ## Solves one foot's target pose from its state. Every branch starts at the rest pose and displaces
@@ -225,6 +241,9 @@ func _solve_target(ch: Channel, is_left: bool, rider: RiderInput) -> void:
 	match ch.state:
 		FootState.HOVERING:
 			ch.target_position.y = flip_hover_height
+		FootState.STOMPING:
+			if ch.stomp_delay > 0.0:
+				ch.target_position.y = flip_hover_height
 		FootState.PUSHING:
 			ch.target_position += _push_offset(ch.phase_time, is_left, rider)
 

@@ -29,8 +29,10 @@ var surface_hit: SurfaceProbe.Hit = SurfaceProbe.Hit.new()
 @export var manual_catch_min_pitch_deg: float = 5.0
 ## Deck pitch at full manual extension, and the ceiling airborne stick pitch works against.
 @export var max_pitch_deg: float = 24.0
-## Kicktail angle snapped to at the instant of a pop.
-@export var pop_pitch_deg: float = 22.0
+## Maximum pop kicktail pitch angle reached during a full-impulse ollie or vertical pop.
+@export var pop_pitch_deg: float = 50.0
+## Exponent applied to vertical velocity ratio during pop ascent; higher values rapidly level initial tilt into a horizontal float.
+@export var pop_leveling_exponent: float = 2.5
 ## Stick deflection below which airborne pitch input is ignored.
 @export var pitch_stick_deadzone: float = 0.15
 ## Lerp rates the deck pitches toward its target at, airborne and grounded.
@@ -112,9 +114,11 @@ var _travel_axis_sign: float = 1.0
 # variable of its own. Two velocity representations was the split this rewrite removed.
 
 @export_category("Flip & Spin Physics (3-Layer Hierarchy)")
-@export var flip_speed_deg: float = 608.0
-@export var spin_speed_deg: float = 432.0
+@export var flip_speed_deg: float = 1020.0
+@export var spin_speed_deg: float = 540.0
 @export var body_spin_speed_deg: float = 554.0
+## Gyroscopic coupling factor: adds rotational inertia to multi-axis tricks (e.g. 360 flips) so they complete later.
+@export var rotational_complexity_coupling: float = 0.15
 var target_board_roll: float = 0.0
 var target_board_yaw: float = 0.0
 ## Signed deg/s imparted to the deck at the pop, then held constant - airborne there is no torque on
@@ -136,6 +140,9 @@ var is_flip_settling: bool = false
 ## measured at touchdown and credited, rather than trusting what was asked for at pop time.
 var _pop_board_roll: float = 0.0
 var _pop_board_yaw: float = 0.0
+var _takeoff_vertical_velocity: float = 0.0
+var _initial_pop_pitch_deg: float = 0.0
+var _apex_reached: bool = false
 ## Raw world body yaw accumulated between pop and touchdown. Rider-normalised only when it is
 ## folded into the trick signature, so this stays comparable with board_pivot.rotation_degrees.y.
 var airborne_body_yaw_deg: float = 0.0
@@ -829,14 +836,21 @@ func _execute_pop() -> void:
 	# at this heading any number of ways.
 	pop_riding_reversed = pivot_reversed()
 	var sig: TrickSignature = trick.current_trick
+	_takeoff_vertical_velocity = maxf(0.0, vertical_velocity)
+	_apex_reached = false
+	var velocity_ratio: float = clampf(_takeoff_vertical_velocity / jump_impulse, 0.0, 1.0)
+	var dynamic_pitch: float = pop_pitch_deg * velocity_ratio
+	if sig.shuv_deg != 0 and sig.flip == TrickSignature.Flip.NONE:
+		dynamic_pitch = minf(dynamic_pitch, 15.0)
+	_initial_pop_pitch_deg = dynamic_pitch
 
 	# Kick the deck's end down: the trailing one for an Ollie, the leading one for a Nollie. Written
 	# rider-relative and mapped onto the pivot's local X by stance_sign(), so switch and goofy need
 	# no separate case.
 	if sig.pop == TrickSignature.Pop.NOLLIE or sig.pop == TrickSignature.Pop.FAKIE_OLLIE:
-		board_pivot.rotation_degrees.x = -pop_pitch_deg * stance_sign()
+		board_pivot.rotation_degrees.x = -dynamic_pitch * stance_sign()
 	else:
-		board_pivot.rotation_degrees.x = pop_pitch_deg * stance_sign()
+		board_pivot.rotation_degrees.x = dynamic_pitch * stance_sign()
 
 	# Where the deck actually was when the trick started, so touchdown can measure what it turned
 	# through rather than assuming it turned through whatever was requested here.
@@ -880,6 +894,12 @@ func _integrate_flight(delta: float) -> void:
 	vertical_velocity -= gravity_accel * delta
 	global_position.y += vertical_velocity * delta
 
+	if not is_grounded and vertical_velocity <= 0.0 and not _apex_reached:
+		_apex_reached = true
+		var sig: TrickSignature = trick.current_trick
+		if not is_flip_in_progress and sig and sig.flip == TrickSignature.Flip.NONE and sig.shuv_deg == 0 and trick.current_pop_state != TrickState.PopState.NONE:
+			foot_rig.execute_catch_stomp(rider.leading_foot, true)
+
 	# Layer 1: Aerial Body & Deck Spin Authority (FS/BS 180s/360s via triggers with fluid momentum smoothing)
 	# Applied to board_pivot.y so rolling travel vector and chase camera stay fixed behind the skater!
 	var target_spin: float = rider.lean * body_spin_speed_deg
@@ -909,6 +929,10 @@ func _integrate_flight(delta: float) -> void:
 			board_mesh.rotation_degrees.z = fmod(board_mesh.rotation_degrees.z, 360.0)
 			board_mesh.rotation_degrees.y = fmod(board_mesh.rotation_degrees.y, 360.0)
 			trick.trick_status_string = "Caught in mid-air!"
+			var sig: TrickSignature = trick.current_trick
+			if sig:
+				var first_foot: RiderInput.Foot = rider.trailing_foot if sig.shuv_deg != 0 else rider.leading_foot
+				foot_rig.execute_catch_stomp(first_foot, false)
 
 	# Touchdown onto whatever surface the probe found - ground, curb top, ramp face.
 	if surface_hit.valid and global_position.y <= _surface_ride_y() and vertical_velocity <= 0.0:
@@ -972,7 +996,19 @@ func _impart_deck_rotation(sig: TrickSignature) -> void:
 	var yaw_ref: float = spin_speed_deg * (2.0 if absi(sig.shuv_deg) == 360 else 1.0)
 	var roll_time: float = absf(roll_sweep) / flip_speed_deg if flip_speed_deg > 0.0 else 0.0
 	var yaw_time: float = absf(yaw_sweep) / yaw_ref if yaw_ref > 0.0 else 0.0
-	var trick_time: float = maxf(roll_time, yaw_time)
+	
+	# Multi-axis rotational inertia coupling: combining simultaneous rotation axes in 3D distributes
+	# angular kinetic energy and extends revolution duration. A 360 flip (360 shuv + flip) carries
+	# twice the secondary angular displacement of a varial flip (180 shuv + flip), naturally extending
+	# its completion and procedural mid-air catch stomp slightly later past jump apex!
+	var primary_time: float = maxf(roll_time, yaw_time)
+	var secondary_time: float = minf(roll_time, yaw_time)
+	var complexity_drag: float = 0.0
+	if roll_time > 0.0 and yaw_time > 0.0:
+		var sweep_ratio: float = (absf(roll_sweep) + absf(yaw_sweep)) / 360.0
+		complexity_drag = secondary_time * rotational_complexity_coupling * sweep_ratio
+	var trick_time: float = primary_time + complexity_drag
+
 	if trick_time <= 0.0:
 		flip_roll_rate = 0.0
 		flip_yaw_rate = 0.0
@@ -1034,13 +1070,17 @@ func _apply_airborne_board_pitch(delta: float) -> void:
 	var back: Vector2 = rider.back_stick()
 	var sig: TrickSignature = trick.current_trick
 
+	if _takeoff_vertical_velocity > 0.01 and vertical_velocity > 0.0:
+		var ratio: float = clampf(vertical_velocity / _takeoff_vertical_velocity, 0.0, 1.0)
+		target_pitch_deg = _initial_pop_pitch_deg * pow(ratio, pop_leveling_exponent)
+
 	if sig and sig.flip != TrickSignature.Flip.NONE and is_flip_in_progress:
-		target_pitch_deg = sig.flick_tilt_deg
+		target_pitch_deg += sig.flick_tilt_deg
 
 	if back.y > pitch_stick_deadzone:
-		target_pitch_deg = back.y * max_pitch_deg # Tail dip (trailing edge)
+		target_pitch_deg += back.y * max_pitch_deg # Tail dip (trailing edge)
 	elif front.y < -pitch_stick_deadzone:
-		target_pitch_deg = front.y * max_pitch_deg # Nose dip (leading edge)
+		target_pitch_deg += front.y * max_pitch_deg # Nose dip (leading edge)
 
 	board_pivot.rotation_degrees.x = lerpf(board_pivot.rotation_degrees.x,
 		target_pitch_deg * stance_sign(), airborne_pitch_follow * delta)
@@ -1128,6 +1168,7 @@ func _evaluate_touchdown_landing() -> void:
 	# Arm the realignment budget with the sideways speed actually arrived with. Set HERE, where that
 	# speed is measured, and nowhere else - a second writer is exactly how it would start growing
 	# again, which is the failure the budget replaced.
+	#
 	_landing_residual = last_landing_slide
 	if last_landing_slide > max_landing_slide:
 		_landing_residual = 0.0 # Washed out; momentum is killed below, so there is nothing to pace.
