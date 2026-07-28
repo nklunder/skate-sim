@@ -104,6 +104,17 @@ const MAX_STEP: float = 1.0 / 30.0
 @onready var left_peg_pivot: Node3D = $"../LeftFoot/PegPivot"
 @onready var right_peg_pivot: Node3D = $"../RightFoot/PegPivot"
 
+## True once the feet have let go of a turning deck, until they have actually come home again.
+##
+## A LATCH rather than a live read of deck_is_spinning, and the difference is not academic. Gating
+## on the live value cut the lift off the instant rotation finished, which is fine only while the
+## rotation and the leg happen to take the same time. Shorten the rotation - which is exactly what
+## flick-speed-driven flip rates will do - and the gate closes on a leg that is still tucked,
+## teleporting the feet: measured 0.149 m in a single frame at a fast rotation.
+##
+## Latching instead means the deck's rotation decides when the feet LET GO, and the rider's legs
+## decide when they come back. Those are two different questions and they no longer have to agree.
+var _feet_released: bool = false
 var _left: Channel = null
 var _right: Channel = null
 
@@ -231,6 +242,13 @@ func solve(delta: float, frame: Frame, rider: RiderInput, camera_yaw: float,
 	_advance_states(step, frame)
 	_solve_target(_left, true, rider, frame)
 	_solve_target(_right, false, rider, frame)
+	# The deck turning is what makes the feet let go; the legs are what bring them back. Held until
+	# the lift has genuinely returned, so the rotation ending can never cut a tuck short.
+	if frame.deck_is_spinning:
+		_feet_released = true
+	elif frame.foot_lift <= 0.0005:
+		_feet_released = false
+
 	for ch in [_left, _right]:
 		if ch.state == FootState.HOVERING or ch.state == FootState.STOMPING:
 			ch.integrate(air_stiffness, air_damping_ratio, step)
@@ -263,7 +281,7 @@ func solve(delta: float, frame: Frame, rider: RiderInput, camera_yaw: float,
 		#
 		# The floor cannot lift the feet off a flat deck: reach is zero at zero roll, so an ollie is
 		# untouched by it and the ollie rule survives whatever the leg is doing.
-		var lift: float = frame.foot_lift if frame.deck_is_spinning else 0.0
+		var lift: float = frame.foot_lift if _feet_released else 0.0
 		lift = maxf(lift, frame.deck_reach * deck_clearance_margin - ch.rest_position.y)
 		ch.node.position = ch.pose_position + Vector3(0.0, maxf(0.0, lift), 0.0)
 		ch.node.rotation = ch.pose_rotation
