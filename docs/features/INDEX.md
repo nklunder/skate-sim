@@ -12,6 +12,10 @@ This directory serves as the centralized technical engineering reference for pla
 |---|---|---|---|---|
 | **01** | **Procedural Foot Animations** | [01_FOOT_ANIMATIONS.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/01_FOOT_ANIMATIONS.md) | 🚧 `PLANNED` | Procedural shoe flick arcs, Shove-it tail sweeps, pop loading weight shift, and IK endpoint preparation. |
 | **02** | **Grind & Slide System** | [02_GRIND_SYSTEM.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/02_GRIND_SYSTEM.md) | 🚧 `PLANNED` | Stage 2 of surface collision: spline-free edge discovery, truck/deck ledge lock-ins, and grind physics. |
+| **07** | **Feel Tuning — "flow"** | [07_FEEL_TUNING.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07_FEEL_TUNING.md) | 🚧 `PLANNED` | **Parent doc — start here.** The sim is physically correct but reads as mechanical; three measured causes and the order to address them. |
+| 07a | ↳ Carve Curvature | [07a_CARVE_CURVATURE.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07a_CARVE_CURVATURE.md) | 🚧 `PLANNED` | Turning has no speed term — $\omega = v/R$. Diagnostic as much as a fix; **do this one first**. |
+| 07b | ↳ Rotation Dynamics | [07b_ROTATION_DYNAMICS.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07b_ROTATION_DYNAMICS.md) | 🚧 `PLANNED` | The deck starts and stops spinning in one frame. Spin-up, spin-down, and precession wobble. |
+| 07c | ↳ Presentation Feel | [07c_PRESENTATION_FEEL.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07c_PRESENTATION_FEEL.md) | 🚧 `PLANNED` | Wheel rumble, optical flow, speed FOV. Probably a large part of the answer — deliberately ordered last so it cannot mask 07a. |
 | **03** | **Sound Design Engine** | [03_SOUND_DESIGN.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/03_SOUND_DESIGN.md) | 🚧 `PLANNED` | Procedural audio: speed-scaled polyurethane wheel rumble, maple tail cracks, and griptape catch thuds. |
 
 ---

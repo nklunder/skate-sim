@@ -113,3 +113,23 @@ Kept briefly so a returning agent can see these are **already done** and does no
 - Dead: `_since_touchdown`, `SurfaceProbe.set_space()`, `last_pop_type`, `active_flip` as a field (`e04cb31`)
 - ~15 magic thresholds exported across `TrickState` and `SkaterController`
 - `FootRig` test coverage — written alongside the first physics-driven foot motion, as the entry said it should be (`tests/foot_rig.tscn`, 12 cases across `{regular, goofy} × {forward, switch}`)
+
+---
+
+## ❓ 9. Grounded turning has no speed term
+
+`_apply_steering()` in `SkaterController.gd`
+
+`turn_rate = lean * turn_speed * _lean_authority()` produces a flat $\approx 169^\circ/\text{s}$ at full lean whether the skater is doing $7\text{ m/s}$ or $1\text{ m/s}$. Physically lean sets a turn RADIUS, so $\omega = v/R$ — roughly right when fast, and about $4\times$ too fast at walking pace, where the board pivots instead of arcing.
+
+**Why left:** it is a deliberate feel change that re-baselines every carve figure, not a bug fix. Fully specified in [07a_CARVE_CURVATURE.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07a_CARVE_CURVATURE.md), including the kickturn interaction.
+
+---
+
+## ❓ 10. The deck's rotation starts and stops in a single frame
+
+`_impart_deck_rotation()` and the Layer 3 block in `SkaterController.gd`
+
+Angular velocity goes $0 \to 13.6^\circ/\text{frame}$ on the first airborne frame, and full rate $\to 0$ on the frame it completes. Infinite angular acceleration at both ends, and the main reason tricks read as mechanical. The constant rate *between* them is correct and should stay.
+
+**Why left:** same as #9 — a deliberate change that moves trick timings. Specified in [07b_ROTATION_DYNAMICS.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07b_ROTATION_DYNAMICS.md), along with the precession wobble and the interactions with the leg tuck and the free-spin handover.

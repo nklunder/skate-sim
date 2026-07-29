@@ -1,0 +1,62 @@
+# 🔊 07c. Presentation Feel — sound, optical flow, and FOV
+**Status:** 🚧 `PLANNED` | **Parent:** [07_FEEL_TUNING.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07_FEEL_TUNING.md) | **Related:** [03_SOUND_DESIGN.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/03_SOUND_DESIGN.md), [04_CAMERA_AND_FILMER_MODE.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/04_CAMERA_AND_FILMER_MODE.md)
+
+---
+
+## 🎯 The honest position
+
+**This is probably a large part of the missing "flow" — possibly larger than the physics gaps in
+07a and 07b.** It is listed last anyway, and the reason matters:
+
+> Presentation would **mask** a physics gap rather than fix it.
+
+If sound and texture land first, low-speed carving will *feel* better while still being $\approx 4\times$
+too fast in angular rate, and there is then no way to tell whether further physics tuning is helping.
+Do 07a first, learn the answer, then come here knowing what is left to solve.
+
+## 🔉 1. Wheel rumble — the primary speed cue
+
+**Without it, $3\text{ m/s}$ and $7\text{ m/s}$ read almost identically no matter how good the
+physics is.** Speed is felt through sound far more than through vision at ground level.
+
+Pitch and amplitude scale with `current_speed`; surface type modulates timbre. Already specified in
+[03_SOUND_DESIGN.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/03_SOUND_DESIGN.md) — this document is not a competing spec, just a statement of *why* it
+belongs to the feel work.
+
+Beyond rumble, the events that carry weight:
+
+- **Tail crack at the pop** — gives the ollie its impact. Its intensity has a natural driver in
+  `pop_impulse_scale`, which already exists and is already graded.
+- **Griptape catch on landing** — the deck being stamped flat. `last_catch_error_deg` grades how
+  clean it was.
+- **Truck/bushing creak while carving** — the sound of the mechanism that 07a is about to model
+  properly.
+
+## 👁️ 2. Optical flow — texture is a motion cue, not decoration
+
+Perceived speed is largely driven by **texture frequency streaming past the camera**. An untextured
+world gives almost no motion parallax, so both speed and the shape of an arc are genuinely hard to
+read — the rider cannot see the flow they are trying to feel.
+
+This is why a physically correct carve can still read as floaty and vague: there is nothing in the
+image changing at a rate the eye can measure.
+
+Ground surface detail matters far more here than object detail.
+
+## 📷 3. Speed-scaled FOV
+
+Cheap, standard, and effective precisely because it sells flow. Already listed as an objective in
+[04_CAMERA_AND_FILMER_MODE.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/04_CAMERA_AND_FILMER_MODE.md) ("dynamic speed FOV").
+
+**Caution:** `ChaseCamera` holds a documented invariant — position and aim must derive from the same
+smoothed yaw, or the subject leaves the frame. It has been broken once, and it did not present as a
+framing bug; it read as *"the pan is too slow"*. Any FOV work must not disturb that, and the
+`offCentre` assertions in `ground_physics` are the guard.
+
+## ✅ Verification
+
+Mostly not suite-testable — this is perceptual work, judged by playing. What the suites still protect:
+
+- `ground_physics` camera assertions (`camStep`, `offCentre`) must not move: FOV is not framing.
+- Nothing here should touch a physics figure at all. **If any suite number moves, something has
+  coupled that should not have.**

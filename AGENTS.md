@@ -7,6 +7,7 @@
 >    - [docs/CHANGELOG_LEDGER.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/CHANGELOG_LEDGER.md) — Chronology of completed session tasks and feature implementations.
 >    - [docs/CLEANUP.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/CLEANUP.md) — Known debt, deferred work, and latent traps. **Read before proposing any refactor**: an item may already have a decided approach, be blocked on a user decision, or be deliberately frozen. It is not a work queue to burn down.
 >    - [docs/features/](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features) ([INDEX.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/INDEX.md)) — Feature engineering blueprints, requirements, and subsystem architectural references.
+>    - **[docs/features/07_FEEL_TUNING.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07_FEEL_TUNING.md) — the ACTIVE work.** The sim is physically sound but reads as mechanical; that parent doc holds the diagnosis, the ordering, and links to each task. Start there when picking the project back up.
 > 3. **Auto-Update Protocol:** You **MUST automatically update this file** immediately whenever:
 >    - The user provides corrective feedback or refines game feel/rules.
 >    - Architectural or design decisions are established (e.g., via `/grill-me` interviews).
