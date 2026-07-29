@@ -85,18 +85,23 @@ const CASES := [
 	# 2/3, 1 over three frames loses exactly one frame of rotation, and 486/60 = 8.1. 486 -> 498 pays
 	# it back. If the ramp durations are retuned, this is the figure that moves with them.
 	#
+	# Then the pop came back DOWN (6.0 -> 5.4) once it read as too high in play, taking ~6 frames of
+	# hang time with it and bailing all three. 498 -> 590. The relationship is simple enough to retune
+	# from arithmetic rather than by search: the deck delivers flip_speed * (airtime - 1) / 60 degrees,
+	# the -1 being the ramp, so the rate wanted is (360 - target_err) * 60 / (airtime - 1).
+	#
 	# Sketchy but rideable: deck is ~36 deg short, inside the cone, so the settle runs several
 	# frames. This is the case that actually exercises the no-teleport guarantee.
 	{"label": "kickflip -> 0.43m ledge", "pos": Vector3(20.0, 0.078, 6.0), "ledge": 0.43,
-		"flip": true, "scoop": 0, "expect": "Landed Kickflip!", "flip_speed": 498.0},
+		"flip": true, "scoop": 0, "expect": "Landed Kickflip!", "flip_speed": 590.0},
 	{"label": "kickflip -> 0.43m, manual", "pos": Vector3(20.0, 0.078, 6.0), "ledge": 0.43,
-		"flip": true, "scoop": 0, "expect": "Landed directly into Manual!", "hold_manual": true, "flip_speed": 498.0},
+		"flip": true, "scoop": 0, "expect": "Landed directly into Manual!", "hold_manual": true, "flip_speed": 590.0},
 	# Past the cone: deck arrives ~56 deg over, foot would slide off the rail. Must still bail.
 	{"label": "kickflip -> 0.55m ledge", "pos": Vector3(20.0, 0.078, 6.0), "ledge": 0.55,
-		"flip": true, "scoop": 0, "expect": "BAIL! (Primo Crash / Incomplete Flip)", "flip_speed": 498.0},
+		"flip": true, "scoop": 0, "expect": "BAIL! (Primo Crash / Incomplete Flip)", "flip_speed": 590.0},
 	# Deck arrives ~213 deg round - genuinely upside down. Must still bail.
 	{"label": "kickflip -> 0.8m platform", "pos": Vector3(-10.0, 0.078, -10.0),
-		"flip": true, "scoop": 0, "expect": "BAIL! (Primo Crash / Incomplete Flip)", "flip_speed": 498.0},
+		"flip": true, "scoop": 0, "expect": "BAIL! (Primo Crash / Incomplete Flip)", "flip_speed": 590.0},
 	# THE RATE PROFILE (07b). Ramp up, hold, ramp down - see the ramp assertion in _finish_case().
 	# A tre flip is included because the ramps scale BOTH axes by one shared factor: sync is a
 	# rate-RATIO lock, so ramping the axes independently would pull the trick apart mid-ramp and put

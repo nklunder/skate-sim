@@ -106,7 +106,9 @@ var last_catch_error_deg: float = 0.0
 @export var landing_dip_max: float = 0.04 # Metres of compression at or above the reference impact.
 ## Impact speed producing full compression. Kept ABOVE jump_impulse on purpose: a flat-ground pop
 ## lands at exactly its takeoff speed, so a reference equal to it would saturate every flat landing
-## at maximum dip and leave the grading with nothing to say except on drops. Raised with the pop.
+## at maximum dip and leave the grading with nothing to say except on drops. Left at 7.0 when the pop
+## came back down to 5.4: a flat landing now sits at 0.77 of full compression, and a drop off the
+## 0.8 m platform arrives at ~7.4 m/s and still reaches it, so the whole range stays in use.
 @export var landing_dip_ref_speed: float = 7.0
 @export var landing_dip_recover: float = 9.0 # Rate the suspension extends back out.
 var _landing_dip: float = 0.0
@@ -134,12 +136,21 @@ var _travel_axis_sign: float = 1.0
 ## board rather than a floatier one. Lowering gravity instead would scale both equally and would
 ## also move which gradients hold the skater, since that threshold is asin(rolling_friction/gravity).
 ##
-## At 6.0 with gravity_accel = 16: peak 1.125 m, airtime 45 frames at 60 Hz.
+## At 5.4 with gravity_accel = 16: peak 0.867 m measured, airtime 40 frames at 60 Hz.
+##
+## 5.4 IS A MEASURED FLOOR, not a taste. It is the lowest pop at which a soft flick still brings the
+## deck fully round - catch error 0.0 deg. Below it the shortfall starts eating catch_cone_deg
+## instead: 6.4 deg at 5.2, 11.9 at 5.0, 36.9 at 4.6 against a 45 deg cone. So lowering the pop
+## further is not free; it has to be paid for by raising flip_speed_deg or flick_rate_min, and a
+## faster deck is the opposite of what 07b was for.
+##
+## Height goes as the SQUARE of this, so pop_impulse_scale bites hard: at 5.4 only a pop above ~96%
+## clears the 0.8 m platform, where at 6.0 anything above ~85% did.
 ##
 ## AIRTIME IS THE ROTATION BUDGET. A soft flick turns at flick_rate_min * flip_speed_deg and has to
 ## bring the deck round inside one hop, so every frame here is a frame the flip and catch ramps can
 ## spend - see flick_rate_min, which is the field that has to rise if this ever falls.
-@export var jump_impulse: float = 6.0
+@export var jump_impulse: float = 5.4
 ## Maximum sideways jump velocity (in m/s) imparted when aiming the pop thumbstick off-center.
 @export var max_lateral_pop_impulse: float = 1.5
 ## Slight natural board yaw offset (in degrees) imparted during directed lateral jumps.
@@ -169,16 +180,16 @@ var _travel_axis_sign: float = 1.0
 ## lazily and risk an incomplete trick, not guarantee a primo - the rider should be able to see it
 ## failing and still catch it.
 ##
-## IT IS TIED TO flip_speed_deg AND TO jump_impulse, and cannot be tuned independently of either. A
-## flat-ground kickflip has 44 frames of airtime at jump_impulse 6.0, so the deck must turn at
-## 491 deg/s or better to come round at all - and the slowest a flick can be is
-## flick_rate_min * flip_speed_deg. At 816 that floor is 0.60; anything under it makes a soft flick
-## an unavoidable primo rather than a recoverable mistake.
+## IT IS TIED TO flip_speed_deg AND TO jump_impulse, and cannot be tuned independently of either.
 ##
-## Slow the deck, or lower the pop, and this has to rise with it. The margin at 0.72 is 587 deg/s
-## against a 491 requirement - 36.8 frames of rotation inside 44 of hang time, so about 7 frames
-## spare. That slack is what the spin-up and catch ramps spend; it was 2.2 frames before the pop was
-## raised, which was not enough for both.
+## MEASURED, at jump_impulse 5.4 (40 frames of airtime). A soft flick turns at 0.72 * 816 = 587 deg/s
+## and needs ~38.7 frames to bring the deck round - 36.8 of rotation plus ~1.9 the ramps cost - so
+## there is about 1.3 frames of slack and a soft flick still completes with 0.0 deg of catch error.
+##
+## Below that pop the shortfall is NOT a primo; it is spent out of catch_cone_deg instead, and the
+## deck lands short but inside the cone: 6.4 deg at jump_impulse 5.2, 11.9 at 5.0, 36.9 at 4.6
+## against a 45 deg cone. So the pop can go lower than 5.4 - it just stops being free, and starts
+## trading clean completion for catch margin. Raise this, or flip_speed_deg, to buy that back.
 @export var flick_rate_min: float = 0.72
 @export var flick_rate_max: float = 1.6
 

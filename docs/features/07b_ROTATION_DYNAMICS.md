@@ -152,10 +152,20 @@ air has already been wound down by the decay branch and cannot exercise the land
 ## ❓ Open
 
 - **Ramp durations** shipped at $0.05\text{s}$ spin-up and $0.06\text{s}$ catch — the physical
-  estimate, now live exports to tune by feel. **The budget they spend was bought by raising the pop**
-  (`jump_impulse` $5.2 \to 6.0$, airtime $39 \to 44$ frames). At the old pop a soft flick had $2.2$
-  frames of slack and the two ramps did not fit; there is now ~$7$. If the pop is ever lowered,
-  `flick_rate_min` has to rise or a soft flick becomes an unavoidable primo.
+  estimate, now live exports to tune by feel.
+
+> ⚠️ **Correction to this document''s own budget claim.** It was first written here that the two ramps
+> cost ~3 frames and "did not fit" the old pop, making a soft flick "an unavoidable primo" — which is
+> why `jump_impulse` was raised $5.2 \to 6.0$. **Both halves of that were overstated.** Measured, the
+> ramps cost ~$1.9$ frames, not $3$; and the shortfall is not a primo, because `catch_cone_deg`
+> absorbs it — the deck lands *short but inside the cone* ($6.4^\circ$ at a $5.2$ pop, $11.9^\circ$ at
+> $5.0$, $36.9^\circ$ at $4.6$ against $45^\circ$). The ramps would have fit at the old pop with a few
+> degrees of catch error. The pop raise was therefore not strictly necessary for 07b — though it was
+> wanted on its own terms at the time, and the pop has since been dialled back to $5.4$ in play.
+
+- **The pop now sits at $5.4$** (peak $0.867\text{ m}$, $40$ frames), which is the lowest value at
+  which a soft flick still completes with $0.0^\circ$ of catch error. Below it the pop is no longer
+  free: it trades clean completion for catch margin, at the rates listed above.
 - **The wobble is authored decoration, not physics — say so.** It writes `BoardMesh.rotation.x`,
   which nothing else reads. Feeding it into `_deck_clearance_demand()` would make it real and move
   the worst-case clearance figure; that is a separate, deliberate decision.
