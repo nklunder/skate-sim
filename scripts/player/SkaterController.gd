@@ -42,6 +42,16 @@ var surface_hit: SurfaceProbe.Hit = SurfaceProbe.Hit.new()
 @export var kickturn_max_speed: float = 0.5
 ## Automatic board pitch angle (in degrees) when initiating a slow-speed kickturn to lift the front wheels.
 @export var kickturn_pitch_deg: float = 10.0
+## Kickturn rotation rate at full lean, in rad/s. A RATE rather than a radius, unlike carving.
+##
+## Carving is a rolling steer, so it obeys omega = v / R and dies away as speed does - which is
+## correct, and is exactly why the kickturn cannot share that term. A kickturn is not the wheels
+## steering the board: the rider is up on the back truck pivoting it round by muscle, and that works
+## just as well stopped. Under v / R a kickturn at 0.3 m/s would rotate at ~6 deg/s, i.e. not at all.
+##
+## 3.0 rad/s is the rate the old shared `turn_speed` produced, kept exactly so the kickturn branch -
+## and the trailing-axle anchoring that only it exercises - is unchanged by the carve work.
+@export var kickturn_rate: float = 3.0
 var manual_timer: float = 0.0
 var is_grounded: bool = true
 var _is_carve_latched: bool = false
@@ -916,23 +926,27 @@ func _apply_push_inputs() -> void:
 
 ## Step 4. Steering and stationary rotation via trigger lean (RT - LT), on pavement only.
 func _apply_steering(delta: float) -> void:
-	# Steering rate is lean input times the board's turn speed times however much of the rider's
-	# weight is actually available to lean with - see _lean_authority(), which is where pop loading,
-	# pushing, and later grinds and manuals all register their cost. Damps STEERING only, never the
-	# push impulse: gating a gameplay term on a body state is fine, gating it on an ANIMATION is not.
-	var turn_rate: float = rider.lean * (rider.board_config.turn_speed if is_instance_valid(rider.board_config) else 3.0) * _lean_authority()
 	if not is_grounded or abs(rider.lean) <= 0.05:
 		_is_carve_latched = false
 		return
-		
+
 	var speed: float = Vector3(velocity.x, 0.0, velocity.z).length()
 	# Latch continuous carving if initiated above kickturn threshold, remaining in carve mode down to near-stall (< 0.05 m/s)
 	if speed >= kickturn_max_speed:
 		_is_carve_latched = true
 	elif speed < 0.05:
 		_is_carve_latched = false
-		
+
+	# How hard the rider is leaning, times however much of their weight is actually available to lean
+	# WITH - see _lean_authority(), which is where pop loading, pushing, manuals and later grinds all
+	# register their cost. Damps STEERING only, never the push impulse: gating a gameplay term on a
+	# body state is fine, gating it on an ANIMATION is not.
+	var effective_lean: float = rider.lean * _lean_authority()
+	var turn_rate: float
+
 	if not _is_carve_latched:
+		# Muscle, not wheels - see kickturn_rate. Stays a flat rate where carving cannot.
+		turn_rate = effective_lean * kickturn_rate
 		# Stationary Kickturn: anchor the rotation on the axle that is ON THE GROUND, so the back
 		# tyres stay locked to the pavement while the nose swings round.
 		#
@@ -947,6 +961,20 @@ func _apply_steering(delta: float) -> void:
 		var axle_world_after: Vector3 = to_global(axle_local_pos)
 		global_position += (axle_world_before - axle_world_after)
 	else:
+		# Carving: lean sets a turn RADIUS, and omega = v / R follows. Lean scales CURVATURE rather
+		# than radius, because lean maps to a truck STEER ANGLE and curvature is what is linear in
+		# that angle - so half lean is a 6 m arc, not a 1.5 m one.
+		#
+		# The speed term is the whole point. A flat rate held the same 172 deg/s at 2 m/s as at 7,
+		# which is ~4x too fast down there: the board spun on the spot instead of arcing, and that
+		# is what read as darty rather than weighted. Now the same lean draws the same arc at any
+		# speed, and the rate rises with speed on its own with no special cases.
+		#
+		# Planar SPEED, unsigned. Rolling fakie therefore still steers the way it does today; a real
+		# board reverses its steering when rolled backwards, but that is a separate change with its
+		# own sign consequences (_travel_axis_sign, the landing residual) and is not part of 07a.
+		var radius: float = rider.board_config.carve_radius_m if is_instance_valid(rider.board_config) else 3.0
+		turn_rate = speed * effective_lean / maxf(radius, 0.01)
 		rotate_y(-turn_rate * delta)
 
 ## Step 5. The pop: vertical impulse, kicktail pitch, and the deck rotation targets for the trick.

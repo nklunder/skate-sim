@@ -1,5 +1,24 @@
 # 🛞 07a. Carve Curvature — turning must depend on speed
-**Status:** 🚧 `PLANNED` | **Parent:** [07_FEEL_TUNING.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07_FEEL_TUNING.md) | **Key file:** `res://scripts/player/SkaterController.gd` (`_apply_steering`)
+**Status:** ✅ `IMPLEMENTED` (awaiting play verdict) | **Parent:** [07_FEEL_TUNING.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07_FEEL_TUNING.md) | **Key file:** `res://scripts/player/SkaterController.gd` (`_apply_steering`)
+
+---
+
+## ✅ What shipped
+
+`carve_radius_m = 3.0` on `SkateBoardConfig` replaces `turn_speed`. Carving is now
+`turn_rate = speed × lean × _lean_authority() / carve_radius_m`; the kickturn branch keeps a flat
+rate of its own (`kickturn_rate = 3.0` rad/s, the exact figure the shared `turn_speed` produced, so
+that branch is unchanged).
+
+**Measured, at full lean:** radius $3.00\text{ m}$ at $7$, $4$ and $2\text{ m/s}$ alike, at
+$121.7$, $66.4$ and $28.6°/\text{s}$. At half lean, $6.00\text{ m}$.
+
+**The old model, measured the same way:** a flat $171.9°/\text{s}$ at every speed — a $2.09\text{ m}$
+radius at $7\text{ m/s}$, $1.12\text{ m}$ at $4$, and **$0.50\text{ m}$ at $2\text{ m/s}$**. That last
+figure is the whole complaint: a half-metre carve radius is a pivot, not an arc.
+
+The remaining question is a **play** one — whether $3\text{ m}$ is the right number, and whether
+low-speed carving now flows. That verdict is what decides how much of 07b/07c is worth doing.
 
 ---
 
@@ -65,21 +84,57 @@ the ground the same treatment costs one lerp.
   `_apply_ground_forces()` scrubs; that mechanism is unchanged, but the *amount* of lateral generated
   per frame changes, so re-check the carve speed-cost figures.
 
-## ✅ Verification
+## ✅ Verification — as run
 
-- **`carve_and_push` re-baselines.** Its carve cases assert turned degrees directly, and every one of
-  them moves. State which and why; do not adjust thresholds to hide a change.
-- The kickturn anchor cases (`check_anchor`) must still pass — those are about which truck the board
-  pivots on, which this does not change.
-- `ground_physics` bank reversals and landings should be unaffected; if they move, that is a signal
-  something coupled that should not have.
-- **Probe worth writing:** turn rate and path radius sampled across $1$–$7\text{ m/s}$ at full lean,
-  confirming the radius is roughly constant and the rate scales.
+All five suites pass (12/12, 19/19, 17/17, 16/16, 16/16). `curb_flip_repro`, `foot_rig` and
+`pop_gesture` are **byte-identical** to before, which is correct: none of them carve.
+
+**The probe was written**, and it is now the load-bearing assertion. Four cases sample $R = v/\omega$
+per frame — three speeds plus a half-lean case — because swept degrees are a bad invariant under this
+model: they change with speed *by design*, so a bound on them measures the test's starting speed as
+much as the physics.
+
+**Falsified before being trusted:** against the old flat-rate model all four fail (reporting the
+$2.09/1.12/0.50\text{ m}$ radii above). Against a model where lean *multiplies* the radius, only the
+half-lean case fails — the three full-lean cases stay green, since at $\text{lean} = 1.0$ every
+formulation coincides. That is exactly why the half-lean case has to exist.
+
+> ⚠️ One earlier "falsification" was worthless and is worth recording: rewriting the term as
+> $R/\text{lean}$ instead of $\text{lean}/R$ is the *same equation rearranged*, and it passed because
+> it was not a different model at all.
+
+**Figures that moved, and why:**
+
+| Case | Before | After | Why |
+|---|---|---|---|
+| `carve @7, no push` | $340.9°$ | $219.0°$ | $120$ frames no longer completes a lap; a $3\text{ m}$ circle at $7\text{ m/s}$ is $360°$ in ~$2.7\text{ s}$, not ~$2.1$. Bound $300 \to 190$ |
+| `steer in a shallow manual` | $138.7°$ | $53.8°$ | $76°/s$ at $4\text{ m/s}$ × $0.8$ damping. Bound $100 \to 45$; the pop-damping cliff it guards would give ~$14°$, so it still catches it wide |
+| `steer in a DEEP manual` | $127.2°$ | $48.9°$ | as above — and the shallow/deep gap holds at ~9%, so the cliff test is intact |
+| `kickturn + push from rest` | $739.7°$ | $418.4°$ | pushes carry it past `kickturn_max_speed`, so the latched carve portion now turns less |
+| landing/skid cases | $426.9°$ | $228.1$–$253.8°$ | less steering, and settled off-axis **improved** ($2.9 \to 1.6$–$1.8$): less steering-generated lateral means the grip cap clears more easily. `max_realign_frames` unmoved at $16$/$17$ |
+| `ground_physics` "carve: turns, keeps speed" | $169°$, $7.00 \to 5.56$ | $120°$, $7.00 \to 5.78$ | the only line that moved in that suite. Less turning ⇒ less lateral scrub ⇒ **less** speed cost, which is the grip coupling behaving correctly |
+
+**Unchanged, as required:** both `check_anchor` cases are identical down to the axle drift figures
+($\text{lead } 0.860$, $\text{trail } 0.041$), and `kickturn @0.3` / `@0.45` still report $570.1°$.
+The trailing-axle anchoring job (BUG_ARCHIVE #6) was not touched, and the kickturn branch was kept on
+its own rate specifically so it would not be.
 
 ## ❓ Open
 
-- **What radius at full lean?** $3\text{ m}$ is a plausible starting point, not a measurement. Real
-  boards vary enormously with truck tightness — this is exactly the knob `SkateBoardConfig` should own,
-  and it is the natural place for the deferred hardware-customisation work ([06](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/06_MODULAR_HARDWARE_CUSTOMIZATION.md)) to become real.
-- Whether to keep a small floor so the board still responds when nearly stopped, or let the stationary
-  kickturn own that range entirely.
+- **What radius at full lean?** Shipped at $3\text{ m}$ and **confirmed good in play** — still an
+  assumption rather than a measurement, but no longer an urgent one. Tunable from the inspector
+  between runs as a live `SkateBoardConfig` export.
+- **`carve_radius_m` IS bushing tightness**, so it is the first hardware property with a real physics
+  knob behind it. An in-game slider was considered and **deferred to [06](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/06_MODULAR_HARDWARE_CUSTOMIZATION.md)** rather than half-built
+  into the settings menu — which pauses the game, so a slider there would be adjust-close-ride rather
+  than live. 06 records the front/rear split question and why one slider over two stored values.
+- ~~Whether to keep a small floor~~ — **decided:** no floor. The stationary kickturn owns the range
+  below `kickturn_max_speed`, and it keeps its own flat rate precisely so it can.
+- **Deferred, and deliberately:** grounded steering is still applied instantly while airborne body
+  spin lerps at `spin_response = 20.0`. One lerp on `turn_rate` closes it. Held back so the
+  `carve_and_push` re-baseline had exactly one cause; it will move the swept-degree figures again
+  (a ramp-in shaves off total swept), but nothing structural.
+- **Rolling fakie still steers the way it always did.** `speed` is the unsigned planar magnitude, so
+  a board rolled backwards turns the same way it would rolling forwards. A real board reverses. Left
+  alone because the sign has consequences for `_travel_axis_sign` and the landing residual, and that
+  is its own change rather than a rider on this one.

@@ -57,14 +57,47 @@ var _air_frames: int = 0
 var _settled_off_axis: float = 0.0
 const SETTLE_FRAMES: int = 60
 
+## Path radius, sampled per frame as v / omega. THIS is the invariant carving now has to hold: lean
+## sets a turn RADIUS, and the angular rate is whatever v / R makes it. Swept degrees were only ever
+## a proxy for "the board turns", and they are a bad one under this model - they change with speed by
+## design, so a bound on them measures the test's starting speed as much as the physics.
+##
+## Sampled only above _RADIUS_MIN_SPEED. Below that the kickturn owns steering, which is a flat rate
+## and deliberately has no constant radius; including it would average two different mechanisms.
+var _radius_sum: float = 0.0
+var _radius_samples: int = 0
+var _rate_sum: float = 0.0
+const _RADIUS_MIN_SPEED: float = 1.0
+
 # speed: initial roll along the board's own -Z.
 # lean: trigger deflection held for the whole run.
 # push_every: kick every N frames.
 # turned_min / turned_max: bounds on total heading change, in degrees. The pair is the point of the
 #   push cases - a push must not stop the carve dead, but must visibly cost turning authority.
 const CASES := [
+	# THE CARVE MODEL. Lean sets a turn radius and omega = v / R follows, so the SAME lean draws the
+	# same arc at every speed while the angular rate scales with it. Three speeds because one point
+	# cannot tell a correct radius from a flat rate that happens to agree there - which is exactly how
+	# the old model passed: it was calibrated at riding speed and ~4x too fast at walking pace.
+	#
+	# Rates are the run MEAN, and speed decays under rolling friction over the 60 frames, so each sits
+	# a little under the v/R figure for its starting speed (7 m/s -> 134 deg/s, 4 -> 76, 2 -> 38).
+	{"label": "carve radius @7", "speed": 7.0, "lean": 1.0, "run": 60,
+		"radius_m": 3.0, "rate_deg_s": 128.0, "max_off_axis": 5.0},
+	{"label": "carve radius @4", "speed": 4.0, "lean": 1.0, "run": 60,
+		"radius_m": 3.0, "rate_deg_s": 72.0, "max_off_axis": 5.0},
+	{"label": "carve radius @2", "speed": 2.0, "lean": 1.0, "run": 60,
+		"radius_m": 3.0, "rate_deg_s": 34.0, "max_off_axis": 5.0},
+	# Half lean must DOUBLE the radius, not halve it. Lean maps to a truck steer angle, and curvature
+	# is what is linear in that angle - so this is the case that would catch lean being applied to R.
+	{"label": "carve radius @4, half lean", "speed": 4.0, "lean": 0.5, "run": 60,
+		"radius_m": 6.0, "radius_tol": 0.5, "max_off_axis": 5.0},
+	# RE-BASELINED by 07a, from turned_min 300. A full-lean carve at 7 m/s is now a 3 m circle, which
+	# is 360 deg in ~2.7 s rather than the ~2.1 s the flat 172 deg/s gave - so 120 frames no longer
+	# completes a lap, and asserting that it does would be asserting the OLD model. The bound stays a
+	# coarse "the carve is not being killed" guard; the radius cases above are what pin the physics.
 	{"label": "carve @7, no push", "speed": 7.0, "lean": 1.0, "run": 120,
-		"turned_min": 300.0, "max_off_axis": 5.0},
+		"turned_min": 190.0, "max_off_axis": 5.0},
 	{"label": "carve @7 + push every 12f", "speed": 7.0, "lean": 1.0, "run": 120, "push_every": 12,
 		"turned_max": 200.0, "max_off_axis": 5.0},
 	{"label": "carve @1.5 + push every 12f", "speed": 1.5, "lean": 1.0, "run": 120, "push_every": 12,
@@ -108,10 +141,15 @@ const CASES := [
 	# fifth of it above, a cliff in the middle of a trick the rider is actively balancing. Both
 	# depths are tested because only the deep one was ever broken, and a single shallow case would
 	# have reported the mechanism healthy.
+	#
+	# RE-BASELINED by 07a, from min_turned 100. At 4 m/s a full-lean carve is 76 deg/s, and
+	# manual_turn_damping keeps 80% of it - so ~61 deg/s, or ~55 deg over the 60-frame run once
+	# friction is counted, where the flat model gave ~135. The bound still catches the bug it exists
+	# for by a wide margin: charging the manual the POP's 0.2 damping instead would turn ~14 deg.
 	{"label": "steer in a shallow manual", "speed": 4.0, "lean": 1.0, "run": 60,
-		"manual_hold": 0.50, "min_turned": 100.0},
+		"manual_hold": 0.50, "min_turned": 45.0},
 	{"label": "steer in a DEEP manual", "speed": 4.0, "lean": 1.0, "run": 60,
-		"manual_hold": 0.85, "min_turned": 100.0},
+		"manual_hold": 0.85, "min_turned": 45.0},
 ]
 
 func _ready() -> void:
@@ -149,6 +187,9 @@ func _start_case() -> void:
 	_trail_axle_drift = 0.0
 	_landed = not CASES[_case].has("land_yaw")
 	_air_frames = 0
+	_radius_sum = 0.0
+	_radius_samples = 0
+	_rate_sum = 0.0
 
 func _physics_process(delta: float) -> void:
 	if _reported or _skater == null:
@@ -196,8 +237,17 @@ func _physics_process(delta: float) -> void:
 		_skater.rider.push_right_triggered = true
 
 	var heading: float = _skater.rotation_degrees.y
-	_turned += rad_to_deg(angle_difference(deg_to_rad(_prev_heading), deg_to_rad(heading)))
+	var swept: float = rad_to_deg(angle_difference(deg_to_rad(_prev_heading), deg_to_rad(heading)))
+	_turned += swept
 	_prev_heading = heading
+
+	# R = v / omega, per frame. Constant radius across a decaying speed is the whole claim.
+	var planar_speed: float = Vector3(_skater.velocity.x, 0.0, _skater.velocity.z).length()
+	var rate: float = absf(swept) / delta
+	if planar_speed >= _RADIUS_MIN_SPEED and rate > 0.01 and _skater.is_grounded:
+		_radius_sum += planar_speed / deg_to_rad(rate)
+		_rate_sum += rate
+		_radius_samples += 1
 	if _skater._landing_residual > 0.0:
 		_realigning_frames += 1
 	_max_off_axis = maxf(_max_off_axis, _travel_vs_board())
@@ -249,8 +299,25 @@ func _finish_case() -> void:
 		elif turned < float(c["min_turned"]):
 			problems.append("turned only %.1f deg in a manual, expected at least %.1f - steering authority is being cut" % [
 				turned, float(c["min_turned"])])
+	var mean_radius: float = (_radius_sum / _radius_samples) if _radius_samples > 0 else 0.0
+	var mean_rate: float = (_rate_sum / _radius_samples) if _radius_samples > 0 else 0.0
 	var detail: String = "turned %5.1f deg | offAxis %4.1f (settled %4.1f) | peak %4.2f m/s | posJump %.4f m | paced %d/%d" % [
 		turned, _max_off_axis, _settled_off_axis, _max_speed, _max_pos_jump, _realigning_frames, _frame]
+
+	# The carve model itself: lean sets the radius, speed sets the rate.
+	if c.has("radius_m"):
+		detail += " | R %.2f m @ %5.1f deg/s" % [mean_radius, mean_rate]
+		if _radius_samples < int(c["run"]) / 2:
+			problems.append("only %d radius samples in %d frames - the carve never sustained" % [
+				_radius_samples, _frame])
+		elif absf(mean_radius - float(c["radius_m"])) > float(c.get("radius_tol", 0.25)):
+			problems.append("carved a %.2f m radius, expected %.2f +/- %.2f - lean is not setting a RADIUS" % [
+				mean_radius, float(c["radius_m"]), float(c.get("radius_tol", 0.25))])
+	# The rate must SCALE with speed, which is what the old flat-rate model got wrong. Asserted per
+	# case so the three probe speeds together pin the slope, not just one point on it.
+	if c.has("rate_deg_s") and absf(mean_rate - float(c["rate_deg_s"])) > float(c.get("rate_tol", 12.0)):
+		problems.append("turned at %.1f deg/s, expected ~%.1f - the rate is not tracking speed" % [
+			mean_rate, float(c["rate_deg_s"])])
 
 	if c.has("max_off_axis") and _max_off_axis > float(c["max_off_axis"]):
 		problems.append("slid %.1f deg off the rolling axis (limit %.1f) - drifting, not carving" % [
