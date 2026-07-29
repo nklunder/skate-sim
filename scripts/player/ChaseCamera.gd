@@ -86,6 +86,30 @@ extends Node3D
 ## everything downstream keeps working.
 @export var camera_position_damp: float = 12.0
 
+## Degrees of extra field of view at full speed, on top of whatever the camera was authored with.
+##
+## Speed is felt largely through how fast texture streams past the edges of the frame, and a fixed
+## lens gives 2 m/s and 7 m/s the same peripheral flow - which is a large part of why riding read as
+## flat regardless of how good the physics underneath it was.
+##
+## Kept DELIBERATELY SUBTLE. Speed-scaled FOV is a racing-game convention, and the reference this sim
+## is chasing does not lean on it - Session sells speed through sound, a low camera and real pavement
+## texture, not through the lens. 07c ranks it third behind wheel rumble and optical flow for exactly
+## that reason. Wide enough to read as a swell at full speed, not as the world bending.
+##
+## Set to 0.0 to disable entirely; the lens then never moves and nothing else changes, since no other
+## code reads it. Worth knowing for motion sensitivity too, which a swelling FOV can provoke.
+@export var fov_gain_deg: float = 4.0
+## Speed at which the full gain is reached, in m/s. Defaults to the rig's own max_push_speed, so the
+## lens is wide open exactly when the rider is going as fast as pushing can carry them.
+@export var fov_speed_ref: float = 7.0
+## How quickly the lens chases the speed it is being shown, per second.
+##
+## Deliberately slow - about a quarter-second constant at 4.0. FOV that tracks speed instantly reads
+## as the lens breathing on every push stroke and every landing; lagging it turns the same change
+## into a swell that arrives after the acceleration is felt, which is what sells it.
+@export var fov_response: float = 4.0
+
 @onready var camera_boom: Camera3D = $Camera3D
 ## The rig this camera orbits. Resolved from the parent rather than exported: CameraPivot is only
 ## ever a child of SkaterRoot, and an exported reference would be one more thing to wire up per scene
@@ -111,6 +135,11 @@ var _travel_heading: float = 0.0
 ## Damped world position the camera orbits around. NOT simply the skater's position: see
 ## camera_position_damp.
 var _camera_pos: Vector3 = Vector3.ZERO
+## Field of view the camera was authored with, captured in _ready() so the speed gain has a fixed
+## origin. Read from the scene rather than hardcoded, for the same reason _camera_boom_rest is: the
+## authored value is the one the framing was designed around, and duplicating it here would let the
+## two disagree the moment anyone adjusts the lens in the editor.
+var _fov_rest: float = 75.0
 
 func _ready() -> void:
 	if skater == null:
@@ -121,6 +150,7 @@ func _ready() -> void:
 	_travel_heading = skater.rotation.y
 	_camera_pos = skater.global_position
 	_camera_boom_rest = camera_boom.position
+	_fov_rest = camera_boom.fov
 
 ## Advances the camera one frame. Called explicitly by SkaterController after position integration -
 ## see the class comment for why this is not a _physics_process.
@@ -198,3 +228,14 @@ func follow(delta: float) -> void:
 	_camera_pos += velocity * delta
 	_camera_pos = _camera_pos.lerp(skater.global_position, minf(camera_position_damp * delta, 1.0))
 	global_position = _camera_pos
+
+	# Speed-scaled FOV. Touches the LENS ONLY - no yaw, no position, no aim - so it cannot disturb the
+	# invariant at the top of this file, structurally rather than by being small. ground_physics'
+	# off-centre assertion measures the angle between the camera's forward basis and the direction to
+	# the skater, which has no projection in it and so is blind to field of view either way.
+	#
+	# PLANAR speed on purpose. current_speed drops the vertical component, so a pop does not punch the
+	# lens open on every ollie and shut again on landing.
+	var speed_frac: float = clampf(skater.current_speed / maxf(fov_speed_ref, 0.01), 0.0, 1.0)
+	camera_boom.fov = lerpf(camera_boom.fov, _fov_rest + fov_gain_deg * speed_frac,
+		minf(fov_response * delta, 1.0))

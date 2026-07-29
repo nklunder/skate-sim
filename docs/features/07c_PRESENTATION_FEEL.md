@@ -43,10 +43,37 @@ image changing at a rate the eye can measure.
 
 Ground surface detail matters far more here than object detail.
 
-## 📷 3. Speed-scaled FOV
+## 📷 3. Speed-scaled FOV — ✅ shipped, deliberately subtle
 
-Cheap, standard, and effective precisely because it sells flow. Already listed as an objective in
-[04_CAMERA_AND_FILMER_MODE.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/04_CAMERA_AND_FILMER_MODE.md) ("dynamic speed FOV").
+`ChaseCamera.fov_gain_deg = 4.0` on top of the authored $75°$, reached at `fov_speed_ref`, eased at
+`fov_response = 4.0` (~quarter-second constant). Measured: $75.0 \to 78.8°$ at $6.92\text{ m/s}$,
+never stepping more than $0.27°$ in a frame.
+
+**Shipped at 4° rather than the 7° first tried, and the reason is worth keeping.** Speed-FOV is a
+racing-game convention; the reference this sim is chasing does not use it. Session sells speed
+through sound, a low camera and real pavement texture — which is precisely the ranking this document
+already argues for, with FOV third behind rumble and optical flow. "Cheap, standard and effective"
+was true of the technique and misleading about the genre.
+
+**`fov_gain_deg = 0.0` disables it completely** and nothing else changes; no other code reads FOV.
+
+### Why it could not disturb the framing invariant
+
+The caution below was well-placed but the guarantee turned out to be structural rather than a matter
+of keeping the change small. `ground_physics._off_centre()` measures the **angle between the camera''s
+forward basis and the direction to the skater** — no projection anywhere — so field of view cannot
+move it in either direction. All five suites were byte-identical with the FOV in.
+
+That also means those assertions cannot verify FOV, so it has its own: the lens must widen with
+speed, stay inside `rest + fov_gain_deg`, and never step more than $1°$ in a frame. Falsified by
+driving the lens straight from speed (steps of $2.98°$) and by zeroing the gain.
+
+> ⚠️ The widen assertion was first written as a flat "moved at least $2°$". That passed only at the
+> gain it was authored against and would have failed the moment the lens was made subtler —
+> re-baselining a suite for a pure tuning change, the same mistake `pop_gesture`''s height bounds made
+> in metres. It is now relative to `fov_gain_deg`, with a floor that still fails a dead lens.
+
+Already listed as an objective in [04_CAMERA_AND_FILMER_MODE.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/04_CAMERA_AND_FILMER_MODE.md) ("dynamic speed FOV").
 
 **Caution:** `ChaseCamera` holds a documented invariant — position and aim must derive from the same
 smoothed yaw, or the subject leaves the frame. It has been broken once, and it did not present as a

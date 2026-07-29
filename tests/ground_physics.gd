@@ -44,6 +44,14 @@ var _initial_lateral: float = 0.0
 ## rig. The camera is a rigid child of SkaterRoot, so a landing that jumps rig yaw would jump the
 ## view by the whole residual at once unless it is eased.
 var _max_cam_step: float = 0.0
+## SPEED-SCALED FOV. Tracked here because this is the camera suite, and because the off-centre and
+## camStep assertions are structurally blind to it: both measure ANGLES between basis vectors, with
+## no projection anywhere, so field of view cannot move them in either direction. That is the proof
+## FOV does not disturb framing - and equally the reason it needs assertions of its own.
+var _fov_min: float = 1e9
+var _fov_max: float = 0.0
+var _max_fov_step: float = 0.0
+var _prev_fov: float = -1.0
 var _prev_cam_yaw: float = 0.0
 var _residual: float = 0.0
 ## Board world yaw across the touchdown frame. The heading residual is transferred from board_pivot
@@ -69,7 +77,10 @@ var _rest_off_centre: float = 0.0
 # land_yaw: rider + board yaw forced through the whole flight, i.e. the heading the rider lands at.
 # speed: initial rolling speed. +Z on a slope case is downhill, -Z is uphill.
 const CASES := [
-	{"label": "flat: coasts to a stop", "speed": 3.0, "settle": 240, "expect_stopped": true},
+	# fov_widens: the lens must open with speed. This case starts at 3 m/s and coasts to rest, so it
+	# sweeps most of the speed range in one run and the FOV has to travel with it.
+	{"label": "flat: coasts to a stop", "speed": 3.0, "settle": 240, "expect_stopped": true,
+		"fov_widens": true},
 	{"label": "2 deg slope: holds at rest", "slope": 2.0, "speed": 0.0, "settle": 180,
 		"expect_stopped": true},
 	{"label": "15 deg slope: rolls downhill", "slope": 15.0, "speed": 0.0, "settle": 120,
@@ -159,6 +170,10 @@ func _start_case() -> void:
 	_max_lateral = 0.0
 	_initial_lateral = _lateral_speed()
 	_max_cam_step = 0.0
+	_fov_min = 1e9
+	_fov_max = 0.0
+	_max_fov_step = 0.0
+	_prev_fov = -1.0
 	_residual = 0.0
 	_board_jump = 0.0
 	_max_dir_step = 0.0
@@ -179,6 +194,13 @@ func _physics_process(_delta: float) -> void:
 	_max_cam_step = maxf(_max_cam_step, absf(rad_to_deg(angle_difference(
 		deg_to_rad(_prev_cam_yaw), deg_to_rad(cam)))))
 	_prev_cam_yaw = cam
+
+	var cam_node: Camera3D = _skater.get_node("CameraPivot/Camera3D") as Camera3D
+	_fov_min = minf(_fov_min, cam_node.fov)
+	_fov_max = maxf(_fov_max, cam_node.fov)
+	if _prev_fov >= 0.0:
+		_max_fov_step = maxf(_max_fov_step, absf(cam_node.fov - _prev_fov))
+	_prev_fov = cam_node.fov
 
 	if c.has("land_yaw"):
 		_run_landing_case(c)
@@ -308,6 +330,14 @@ func _travel_vs_board() -> float:
 	var a: float = rad_to_deg(v.normalized().angle_to(axis.normalized()))
 	return minf(a, 180.0 - a)
 
+## Field of view the camera rests at, and the ceiling the speed gain may reach. Derived from the
+## camera's own exports rather than written down, so retuning the gain cannot silently re-baseline
+## this suite - the same reason pop_gesture states its height bounds as fractions of v^2/2g.
+func _fov_rest() -> float:
+	var pivot: ChaseCamera = _skater.get_node("CameraPivot") as ChaseCamera
+	var cam: Camera3D = _skater.get_node("CameraPivot/Camera3D") as Camera3D
+	return cam.fov if pivot == null else pivot._fov_rest
+
 func _finish_case() -> void:
 	var c: Dictionary = CASES[_case]
 	var problems: Array[String] = []
@@ -411,6 +441,33 @@ func _finish_case() -> void:
 			# Grip must then pull travel back onto the board's axis.
 			if _travel_vs_board() > 1.0:
 				problems.append("travel still %.1f deg off the board axis after settling" % _travel_vs_board())
+
+	# THE LENS. Speed-scaled FOV must widen with speed, stay inside its authored ceiling, and never
+	# step - a lens that snaps reads as the camera flinching rather than as the world opening up.
+	var pivot: ChaseCamera = _skater.get_node("CameraPivot") as ChaseCamera
+	if pivot != null:
+		var rest: float = _fov_rest()
+		detail += " | fov %.1f-%.1f (step %.2f)" % [_fov_min, _fov_max, _max_fov_step]
+		if _fov_min < rest - 0.01:
+			problems.append("fov fell to %.1f, under its authored rest of %.1f" % [_fov_min, rest])
+		if _fov_max > rest + pivot.fov_gain_deg + 0.01:
+			problems.append("fov reached %.1f, over the %.1f ceiling its gain allows" % [
+				_fov_max, rest + pivot.fov_gain_deg])
+		# Eased, not stepped. fov_response 4.0 over a 7 deg gain cannot move more than ~0.47 deg in a
+		# frame even from a standing start, so 1.0 catches a lens driven straight from speed.
+		if _max_fov_step > 1.0:
+			problems.append("fov jumped %.2f deg in one frame - the lens is tracking speed directly, not eased" % _max_fov_step)
+		# Relative to the gain, never an absolute degree count. Written as a flat "moved at least 2 deg"
+		# this passed only at the gain it was authored against and would have failed the moment the
+		# lens was made subtler - re-baselining a suite for a tuning change, which is the same mistake
+		# pop_gesture's height bounds made in metres. The 0.5 floor is what still fails a DEAD lens,
+		# since a gain-relative bound alone would ask for zero movement when the gain is zero.
+		if c.get("fov_widens", false):
+			var peak_frac: float = clampf(_peak_speed / maxf(pivot.fov_speed_ref, 0.01), 0.0, 1.0)
+			var need: float = maxf(0.5, 0.3 * pivot.fov_gain_deg * peak_frac)
+			if _fov_max - _fov_min < need:
+				problems.append("fov moved %.2f deg across the run, expected at least %.2f - speed is not opening the lens" % [
+					_fov_max - _fov_min, need])
 
 	if not problems.is_empty():
 		_failures += 1
