@@ -161,6 +161,15 @@ air has already been wound down by the decay branch and cannot exercise the land
   the worst-case clearance figure; that is a separate, deliberate decision.
 - **Item 4, imperfect sync** — see above. Not done, and it needs a decision about the `sync`
   assertion before it can be.
+- **Held tricks fired by accident, and it was a threshold-sharing bug rather than a timing one.**
+  Reported in play as "held flip tricks are too sensitive". `flick_held` reused
+  `flick_min_deflection` ($0.35$) — the threshold that *fires* a flick — so any stick position
+  capable of throwing the trick also counted as asking for another turn. Turn 1 completes ~27 frames
+  after the pop, so a thumb following through had under half a second to clear it. Fixed with a
+  dedicated `flick_hold_min_deflection` ($0.60$); all five suites stayed byte-identical, because the
+  deliberate-hold cases drive $0.7$. Two new cases pin it from both sides — a thumb resting at $0.45$
+  must give a single, and a deliberate hold at $0.65$ must still give a double, so the fix cannot
+  simply have moved the problem.
 - **Free-spin still ramps up but never ramps down**, by design: the catch ramp is gated off while the
   flick is held, and release hands to `_advance_flip_settle()` which carries the deck's own rate as
   it always did. The settle owns that deceleration; the flip block owns the other one. They can never

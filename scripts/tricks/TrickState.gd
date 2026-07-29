@@ -30,6 +30,23 @@ enum PopState { NONE, LOADING_OLLIE, LOADING_NOLLIE, POPPED }
 @export_range(0.0, 1.0) var low_pop_max_ratio: float = 0.25
 ## How far the OPPOSITE stick must be thrown to release the pop.
 @export_range(0.1, 1.0) var flick_min_deflection: float = 0.35
+## How far the stick must STILL be deflected for the flick to count as held, sustaining the rotation
+## into a double or triple. Deliberately higher than flick_min_deflection.
+##
+## Reusing the trigger threshold for the sustain is what made held tricks fire by accident: any stick
+## position that could have THROWN the flick also counted as still asking for more, so a thumb
+## following through - or simply resting part-way out - kept the deck spinning. Turn 1 completes about
+## 27 frames after the pop, so the rider had under half a second to get back under 0.35 or they got a
+## double they never asked for.
+##
+## Same shape as the two-stage balance law on holds_*_balance(), for the same reason: entering a state
+## and sustaining it are different requests and should not share a number. Here the sustain is the
+## STRICTER of the two, because the failure being guarded is an accidental hold rather than an
+## accidental drop.
+##
+## Raise it if doubles still fire unintentionally; lower it if deliberately holding one feels like a
+## fight. Below flick_min_deflection it stops doing anything, since the flick could not have fired.
+@export_range(0.1, 1.0) var flick_hold_min_deflection: float = 0.60
 ## How closely the stick must still point along the direction it was flicked for the flick to count
 ## as HELD, as a dot product. 1.0 demands the exact direction; 0.6 allows about 53 degrees either way.
 ##
@@ -285,7 +302,7 @@ func _track_flick_hold(_delta: float) -> void:
 		flick_held = false
 		return
 	var stick: Vector2 = rider.left_stick_raw if _flick_is_left else rider.right_stick_raw
-	flick_held = stick.length() >= flick_min_deflection \
+	flick_held = stick.length() >= flick_hold_min_deflection \
 		and stick.normalized().dot(_flick_dir) >= flick_hold_alignment
 
 ## Peak-holds each stick's speed so a flick is measured by the whole throw rather than by whichever

@@ -150,6 +150,24 @@ const CASES := [
 		"flip": true, "scoop": 0, "hold_flick": 72, "jump": 16.0, "expect_turns": 3},
 	{"label": "double tre flip (held)", "pos": Vector3(4.0, 0.078, 14.0),
 		"flip": true, "scoop": 360, "hold_flick": 58, "jump": 16.0, "expect_turns": 2, "sync": true},
+	# THE ACCIDENTAL DOUBLE. Reported as "held flip tricks are too sensitive, I trigger them without
+	# meaning to". The hold reused flick_min_deflection (0.35) - the very threshold that FIRES a
+	# flick - so any stick position capable of throwing the trick also counted as asking for another
+	# turn. A thumb following through, or just resting part-way out, kept the deck spinning, and turn
+	# 1 completes ~27 frames after the pop, so the rider had well under half a second to clear it.
+	#
+	# 0.45 is the diagnostic value: comfortably above flick_min_deflection and below
+	# flick_hold_min_deflection, so it is a stick that WOULD have sustained the rotation before and
+	# must not now. Held for the full 46 frames a deliberate double uses, on the same 16.0 jump, so
+	# nothing but the deflection distinguishes it from the double case above.
+	{"label": "resting thumb, no double", "pos": Vector3(4.0, 0.078, 14.0),
+		"flip": true, "scoop": 0, "hold_flick": 46, "hold_at": 0.45, "jump": 16.0,
+		"expect_turns": 1},
+	# And the deliberate hold must still work at a deflection only just over the line, or the fix has
+	# simply moved the problem: a rider who genuinely wants a double should not have to bury the stick.
+	{"label": "deliberate double, 0.65", "pos": Vector3(4.0, 0.078, 14.0),
+		"flip": true, "scoop": 0, "hold_flick": 46, "hold_at": 0.65, "jump": 16.0,
+		"expect_turns": 2},
 	# A stick that is still DEFLECTED but no longer pointing where it was flicked must stop
 	# sustaining. The rider flicks left and then pushes down - reaching for a manual on the way in -
 	# and that must not read as "keep flipping". Deflection alone cannot tell the two apart; only
@@ -228,7 +246,7 @@ func _physics_process(_delta: float) -> void:
 	# Hold the flick out for a while after the pop: each completion reached while it is still held
 	# buys another turn.
 	if _popped and _frame - _pop_frame < int(CASES[_case].get("hold_flick", 0)):
-		_skater.rider.left_stick_raw = Vector2(-0.7, 0.0)
+		_skater.rider.left_stick_raw = Vector2(-float(CASES[_case].get("hold_at", 0.7)), 0.0)
 	elif CASES[_case].has("hold_flick"):
 		_skater.rider.left_stick_raw = CASES[_case].get("after_flick", Vector2.ZERO)
 
@@ -363,8 +381,14 @@ func _finish_case() -> void:
 			_reversed, float(c["max_reversed"])])
 	# Held rotation: the turn count must have grown by the time the deck came down.
 	if c.has("expect_turns") and _turns != int(c["expect_turns"]):
-		problems.append("completed %d roll turns, expected %d - holding the flick did not extend it" % [
-			_turns, int(c["expect_turns"])])
+		# Both directions are real failures and they mean opposite things, so the message has to say
+		# which: too FEW is a hold that did not register, too MANY is a hold that fired by accident.
+		if _turns > int(c["expect_turns"]):
+			problems.append("completed %d roll turns, expected %d - the deck kept spinning off a stick the rider was not holding" % [
+				_turns, int(c["expect_turns"])])
+		else:
+			problems.append("completed %d roll turns, expected %d - holding the flick did not extend it" % [
+				_turns, int(c["expect_turns"])])
 	# Flick intensity: a harder throw must finish the rotation sooner, a lazy one later.
 	if c.has("roll_stops_before") and _last_roll_move >= int(c["roll_stops_before"]):
 		problems.append("roll stopped f%d, expected before f%d - a hard flick did not speed it up" % [
