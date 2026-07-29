@@ -27,6 +27,19 @@ var _landed_frame: int = -1
 var _prev_roll: float = 0.0
 var _prev_yaw: float = 0.0
 var _max_roll_step: float = 0.0
+## Per-frame roll steps for the ramp assertions - see the profile block. `_last_full_roll_step` is
+## the step BEFORE the final one, and the distinction is load-bearing: the final step is a partial,
+## clamped by move_toward as it lands exactly on the target, so its size is set by where the target
+## happens to fall on the frame grid rather than by the deck's rate. Asserting on it passed a deck
+## with no catch ramp at all.
+var _first_roll_step: float = 0.0
+var _last_roll_step: float = 0.0
+var _last_full_roll_step: float = 0.0
+## Precession wobble on BoardMesh's THIRD axis (07b). Peak in flight, and whatever is left at
+## touchdown. The second is the one that matters: the wobble is airborne-only and nothing advances it
+## once grounded, so anything surviving the landing is a permanent tilt on the deck.
+var _peak_wobble: float = 0.0
+var _wobble_at_land: float = 0.0
 ## Last airborne frame on which each axis actually moved. Sampling "has it reached its target" from
 ## outside cannot work: the catch clears the flags and fmods the angles during the controller's own
 ## tick, so the finishing frame is never visible here. When each axis STOPPED turning is observable,
@@ -67,18 +80,32 @@ const CASES := [
 	# already a per-case knob, while the 0.8 m platform is fixed world geometry. 608 -> 486 restores
 	# ~36 / ~52 / ~85 deg of error, which is where these sat before.
 	#
+	# Then 07b's spin-up ramp cost every one of them a further 8.1 deg - a CONSTANT angular deficit
+	# rather than a proportional one, which is why all three moved by the same amount: ramping 1/3,
+	# 2/3, 1 over three frames loses exactly one frame of rotation, and 486/60 = 8.1. 486 -> 498 pays
+	# it back. If the ramp durations are retuned, this is the figure that moves with them.
+	#
 	# Sketchy but rideable: deck is ~36 deg short, inside the cone, so the settle runs several
 	# frames. This is the case that actually exercises the no-teleport guarantee.
 	{"label": "kickflip -> 0.43m ledge", "pos": Vector3(20.0, 0.078, 6.0), "ledge": 0.43,
-		"flip": true, "scoop": 0, "expect": "Landed Kickflip!", "flip_speed": 486.0},
+		"flip": true, "scoop": 0, "expect": "Landed Kickflip!", "flip_speed": 498.0},
 	{"label": "kickflip -> 0.43m, manual", "pos": Vector3(20.0, 0.078, 6.0), "ledge": 0.43,
-		"flip": true, "scoop": 0, "expect": "Landed directly into Manual!", "hold_manual": true, "flip_speed": 486.0},
+		"flip": true, "scoop": 0, "expect": "Landed directly into Manual!", "hold_manual": true, "flip_speed": 498.0},
 	# Past the cone: deck arrives ~56 deg over, foot would slide off the rail. Must still bail.
 	{"label": "kickflip -> 0.55m ledge", "pos": Vector3(20.0, 0.078, 6.0), "ledge": 0.55,
-		"flip": true, "scoop": 0, "expect": "BAIL! (Primo Crash / Incomplete Flip)", "flip_speed": 486.0},
+		"flip": true, "scoop": 0, "expect": "BAIL! (Primo Crash / Incomplete Flip)", "flip_speed": 498.0},
 	# Deck arrives ~213 deg round - genuinely upside down. Must still bail.
 	{"label": "kickflip -> 0.8m platform", "pos": Vector3(-10.0, 0.078, -10.0),
-		"flip": true, "scoop": 0, "expect": "BAIL! (Primo Crash / Incomplete Flip)", "flip_speed": 486.0},
+		"flip": true, "scoop": 0, "expect": "BAIL! (Primo Crash / Incomplete Flip)", "flip_speed": 498.0},
+	# THE RATE PROFILE (07b). Ramp up, hold, ramp down - see the ramp assertion in _finish_case().
+	# A tre flip is included because the ramps scale BOTH axes by one shared factor: sync is a
+	# rate-RATIO lock, so ramping the axes independently would pull the trick apart mid-ramp and put
+	# it back together afterwards. Its "sync" flag is what catches that, and it is the reason the
+	# ramp is a single scalar rather than a per-axis envelope.
+	{"label": "kickflip, rate profile", "pos": Vector3(4.0, 0.078, 14.0),
+		"flip": true, "scoop": 0, "ramps": true},
+	{"label": "tre flip, ramped in sync", "pos": Vector3(4.0, 0.078, 14.0),
+		"flip": true, "scoop": 360, "ramps": true, "sync": true},
 	# Combined-axis tricks: the sync assertion. Both axes must stop turning on the same frame.
 	# No exact name is asserted - these inject a signature directly, so the resolved name is
 	# TrickNames' business and would make this suite fail for unrelated naming changes. Landing at
@@ -97,8 +124,11 @@ const CASES := [
 	# A signature with NO flick measurement means "unmeasured", not "flicked infinitely slowly" - the
 	# keyboard pop sets none, and every other case here injects one. Those must take the reference
 	# rate, which is what keeps this whole feature a no-op for the rest of the suite.
+	# RE-BASELINED by 07b, from 24. The spin-up ramp delays every completion by about a frame, and a
+	# hard flick has the least room to absorb it because it finishes soonest. What the pair still
+	# pins is the GAP between a hard and a lazy flick, which is untouched at 4+ frames.
 	{"label": "kickflip, hard flick", "pos": Vector3(4.0, 0.078, 14.0),
-		"flip": true, "scoop": 0, "flick_speed": 42.0, "roll_stops_before": 24},
+		"flip": true, "scoop": 0, "flick_speed": 42.0, "roll_stops_before": 26},
 	{"label": "kickflip, lazy flick", "pos": Vector3(4.0, 0.078, 14.0),
 		"flip": true, "scoop": 0, "flick_speed": 3.5, "roll_stops_after": 30},
 	# HELD ROTATION. The deck free-spins for as long as the flick is held and settles to the NEAREST
@@ -171,6 +201,11 @@ func _start_case() -> void:
 	_popped = false
 	_landed_frame = -1
 	_max_roll_step = 0.0
+	_first_roll_step = 0.0
+	_last_roll_step = 0.0
+	_last_full_roll_step = 0.0
+	_peak_wobble = 0.0
+	_wobble_at_land = 0.0
 	_rolled = 0.0
 	_peak_rolled = 0.0
 	_prev_roll_signed = _skater.board_mesh.rotation_degrees.z
@@ -233,6 +268,16 @@ func _physics_process(_delta: float) -> void:
 	_prev_roll = roll
 	_prev_yaw = yaw
 	_max_roll_step = maxf(_max_roll_step, d_roll)
+	if not _skater.is_grounded:
+		_peak_wobble = maxf(_peak_wobble, absf(_skater.board_mesh.rotation_degrees.x))
+	# THE RATE PROFILE (07b). A real deck does not start or stop rotating instantly, so the per-frame
+	# step must ramp up, hold flat, and ramp down. Recorded as the first and last MOVING frames
+	# against the peak; a deck with no ramps reports all three equal.
+	if d_roll > 0.01:
+		if _first_roll_step <= 0.0:
+			_first_roll_step = d_roll
+		_last_full_roll_step = _last_roll_step
+		_last_roll_step = d_roll
 	# SIGNED, deliberately: d_roll above is an absolute step, so accumulating it would make an
 	# unwinding deck appear to keep turning forwards and the reversal below could never be non-zero.
 	_rolled += rad_to_deg(angle_difference(deg_to_rad(_prev_roll_signed), deg_to_rad(roll)))
@@ -256,6 +301,7 @@ func _physics_process(_delta: float) -> void:
 		_status = _skater.trick.trick_status_string
 		_speed = _skater.current_speed
 		_catch_err = _skater.last_catch_error_deg
+		_wobble_at_land = absf(_skater.board_mesh.rotation_degrees.x)
 
 	if _landed_frame >= 0 and _frame - _landed_frame >= 20:
 		_finish_case()
@@ -275,6 +321,36 @@ func _finish_case() -> void:
 		var cap: float = maxf(absf(_skater.flip_roll_rate), _skater.flip_speed_deg) / 60.0
 		if _max_roll_step > cap + 0.5:
 			problems.append("roll jumped %.2f deg in one frame (cap %.2f)" % [_max_roll_step, cap])
+	# THE RAMPS (07b). The deck used to go 0 -> full rate in one frame at the pop and full -> 0 in one
+	# frame at completion. Nothing physical does that, and it was the largest single reason tricks
+	# read as machine-driven. A foot applies torque over its contact time, and the feet absorb the
+	# catch over a few frames.
+	#
+	# Asserted as a RATIO to the peak step, so it stays true if the rates or the ramp durations are
+	# retuned. Without the ramps all three figures are equal and both bounds fail at once.
+	if c.get("ramps", false):
+		if _max_roll_step <= 0.0:
+			problems.append("the deck never turned - the ramp case is not testing what it claims")
+		else:
+			var up: float = _first_roll_step / _max_roll_step
+			var down: float = _last_full_roll_step / _max_roll_step
+			if up > float(c.get("max_first_frac", 0.5)):
+				problems.append("first frame was %.2f of peak rate (limit %.2f) - the deck starts spinning instantly" % [
+					up, float(c.get("max_first_frac", 0.5))])
+			if down > float(c.get("max_last_frac", 0.75)):
+				problems.append("last frame was %.2f of peak rate (limit %.2f) - the deck stops dead rather than being caught" % [
+					down, float(c.get("max_last_frac", 0.75))])
+	# THE WOBBLE (07b). Visual only, on an axis nothing else reads - so what can go wrong is not that
+	# it disturbs a landing but that it OUTLIVES one. Nothing advances it while grounded, so a
+	# non-zero tilt at touchdown is simply left on the deck forever.
+	if c.get("ramps", false) and _peak_wobble < 0.5:
+		problems.append("deck never wobbled (peak %.2f deg) - the precession term is not running" % _peak_wobble)
+	# Checked on EVERY case, not just the ramp ones. A trick that finishes in the air has its wobble
+	# wound down by the decay branch long before touchdown, so those cases cannot see the landing
+	# clear at all - it is the deck still turning AS it lands (the ledge cases, and every bail) that
+	# actually exercises it.
+	if _wobble_at_land > 0.001:
+		problems.append("deck landed still tilted %.3f deg on its third axis - the wobble outlived the trick" % _wobble_at_land)
 	# Axis sync: both rotations must stop turning on the same frame.
 	if c.get("sync", false):
 		if _last_roll_move < 0 or _last_yaw_move < 0:
@@ -305,9 +381,14 @@ func _finish_case() -> void:
 
 	if not problems.is_empty():
 		_failures += 1
-	print("%-28s %s air %2d | err %4.1f | step %5.2f | spd %.2f | %s" % [
+	var line: String = "%-28s %s air %2d | err %4.1f | step %5.2f | spd %.2f | %s" % [
 		c["label"], "PASS" if problems.is_empty() else "FAIL", _landed_frame - _pop_frame,
-		_catch_err, _max_roll_step, _speed, _status])
+		_catch_err, _max_roll_step, _speed, _status]
+	if c.get("ramps", false) and _max_roll_step > 0.0:
+		line += " | ramp %.2f -> 1.00 -> %.2f | wobble %.2f -> %.3f" % [
+			_first_roll_step / _max_roll_step, _last_full_roll_step / _max_roll_step,
+			_peak_wobble, _wobble_at_land]
+	print(line)
 	for p in problems:
 		print("     -> %s" % p)
 

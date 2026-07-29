@@ -168,6 +168,43 @@ var _travel_axis_sign: float = 1.0
 ## raised, which was not enough for both.
 @export var flick_rate_min: float = 0.72
 @export var flick_rate_max: float = 1.6
+
+@export_group("Angular Acceleration")
+## Seconds the deck takes to reach full rotation rate after the pop.
+##
+## A foot applies torque over its CONTACT TIME, not instantaneously - roughly 30-50 ms, so 2-3 frames
+## at 60 Hz. Without this the deck went from 0 to 13.6 deg/frame in a single frame, which is not a
+## tuning value being wrong but a missing term: nothing physical starts rotating that way, and it is
+## the largest single reason tricks read as machine-driven rather than thrown.
+@export var flip_spin_up_time: float = 0.05
+## Seconds of deceleration as the deck arrives at its target, i.e. the feet absorbing the catch.
+##
+## The same physical event the landing already models with catch_cone_deg - the rider stamping the
+## deck flat - applied in mid-air. Without it the deck dropped from full rate to zero in one frame.
+@export var flip_catch_time: float = 0.06
+## Fraction of full rate the deck is still turning at when it reaches the target. MUST be > 0, or
+## move_toward approaches asymptotically and the trick never completes.
+@export_range(0.05, 1.0) var flip_catch_floor: float = 0.35
+## Peak wobble on the deck's third axis, in degrees, at reference flick intensity.
+##
+## A deck flicked at its EDGE receives angular momentum that is not aligned with a principal axis, so
+## it precesses - it tumbles slightly rather than spinning true like a wheel on an axle. Mild real
+## physics rather than a cheat, and even 2-3 deg reads very differently.
+##
+## PURELY VISUAL, and deliberately so: this writes BoardMesh's x rotation, which nothing else reads.
+## The catch cone judges roll and yaw only, and _deck_clearance_demand() reads roll only, so the
+## wobble cannot disturb a landing or the feet. That also makes it authored decoration rather than
+## physics - honest naming for what it currently is. Feeding it into the clearance would make it real
+## and would move the worst-case figure, which is a separate decision.
+@export var wobble_max_deg: float = 2.5
+## Wobble cycles per full deck revolution. Precession rate is proportional to spin rate for a rigid
+## body, so tying it to the turn rather than to wall-clock time is what keeps it looking coupled to
+## the trick instead of like an independent vibration.
+@export var wobble_cycles_per_turn: float = 1.5
+## Exponential decay time for the wobble, in seconds. Angular momentum is not lost in flight, but the
+## deck settles onto its principal axis, and a wobble that is still going at the catch fights it.
+@export var wobble_decay_time: float = 0.35
+@export_group("")
 ## How far a released deck may UNWIND to reach a resting orientation instead of carrying on to the
 ## next one, in degrees.
 ##
@@ -215,6 +252,13 @@ var _flip_free_spinning: bool = false
 ## How far the deck may UNWIND to reach a resting orientation instead of carrying on to the next one,
 ## in degrees. Set per settle, because the two cases want different answers - see _settle_target().
 var _settle_unwind_deg: float = 180.0
+## Seconds elapsed into the spin-up ramp. See _spin_up_scale().
+var _spin_up_elapsed: float = 0.0
+## Peak wobble amplitude for the trick in flight, in degrees, and the phase it has accumulated.
+## Amplitude is fixed at the pop from flick intensity; phase advances with the deck's own turn rate.
+var _wobble_amp: float = 0.0
+var _wobble_phase: float = 0.0
+var _wobble_elapsed: float = 0.0
 ## Signed deg/s imparted to the deck at the pop, then held constant - airborne there is no torque on
 ## the board, so constant angular velocity is the physically correct integration.
 ##
@@ -1118,11 +1162,25 @@ func _integrate_flight(delta: float) -> void:
 	# `deck_is_spinning` in step 8c, and its state machine decides whether that means hovering clear
 	# of the deck or returning to the rest pose - which is the same choice the hover()/lower() pair
 	# used to make from inside this block, but made in one place alongside every other foot state.
+	# ONE factor, scaling both axes together. Flip/scoop sync is a rate-RATIO lock - the two axes
+	# arrive together because their rates are in proportion - so anything that scales a rate has to
+	# scale both by the SAME number. Ramping each axis on its own timer would pull a tre flip apart
+	# during the ramp and put it back together afterwards.
+	#
+	# The catch ramp is applied only when the rider is NOT still holding the flick. That is physically
+	# the right test - a rider holding a spin is not catching it - and it is also what keeps the
+	# free-spin handover invisible: the deck reaches turn 1 at full rate and carries straight on,
+	# rather than decelerating into the handover and then jumping back to full.
+	var spin: float = _spin_up_scale(delta)
+	if not trick.flick_held:
+		spin *= _catch_scale()
+	_advance_wobble(delta)
+
 	if is_flip_in_progress and _flip_free_spinning:
 		# HELD PAST THE TRICK: no target at all, just angular velocity. The deck turns for as long as
 		# the rider keeps asking, so how far it gets is simply how long they held.
-		board_mesh.rotation_degrees.z += flip_roll_rate * delta
-		board_mesh.rotation_degrees.y += flip_yaw_rate * delta
+		board_mesh.rotation_degrees.z += flip_roll_rate * spin * delta
+		board_mesh.rotation_degrees.y += flip_yaw_rate * spin * delta
 		if not trick.flick_held:
 			# Let go. Hand to the settle, which rounds to the NEAREST resting orientation and takes
 			# the short way there - so two and a half turns carry on to three, while two and a tenth
@@ -1135,8 +1193,8 @@ func _integrate_flight(delta: float) -> void:
 			_settle_unwind_deg = flip_unwind_max_deg
 			trick.trick_status_string = "Caught in mid-air!"
 	elif is_flip_in_progress:
-		board_mesh.rotation_degrees.z = move_toward(board_mesh.rotation_degrees.z, target_board_roll, absf(flip_roll_rate) * delta)
-		board_mesh.rotation_degrees.y = move_toward(board_mesh.rotation_degrees.y, target_board_yaw, absf(flip_yaw_rate) * delta)
+		board_mesh.rotation_degrees.z = move_toward(board_mesh.rotation_degrees.z, target_board_roll, absf(flip_roll_rate) * spin * delta)
+		board_mesh.rotation_degrees.y = move_toward(board_mesh.rotation_degrees.y, target_board_yaw, absf(flip_yaw_rate) * spin * delta)
 
 		# Catch trick cleanly when deck revolution completes (grip tape facing up). This is the frame
 		# a mid-air catch stomp will be fired from - see 01_FOOT_ANIMATIONS.md section 4.
@@ -1229,6 +1287,12 @@ func _impart_deck_rotation(sig: TrickSignature) -> void:
 		complexity_drag = secondary_time * rotational_complexity_coupling * sweep_ratio
 	var trick_time: float = primary_time + complexity_drag
 
+	# Both ramps restart with the trick, so a pop landing mid-settle does not inherit a finished ramp.
+	_spin_up_elapsed = 0.0
+	_wobble_amp = 0.0
+	_wobble_phase = 0.0
+	_wobble_elapsed = 0.0
+
 	if trick_time <= 0.0:
 		flip_roll_rate = 0.0
 		flip_yaw_rate = 0.0
@@ -1238,6 +1302,62 @@ func _impart_deck_rotation(sig: TrickSignature) -> void:
 	var intensity: float = _flick_rate_scale(sig.flick_speed)
 	flip_roll_rate = roll_sweep / trick_time * intensity
 	flip_yaw_rate = yaw_sweep / trick_time * intensity
+	# Harder flick, more off-axis momentum, more tumble. Same intensity factor the rates use, so the
+	# wobble tracks how the trick was thrown rather than being a constant decoration on every one.
+	_wobble_amp = wobble_max_deg * intensity
+
+## Fraction of full rotation rate during the spin-up ramp, rising to 1.0 over flip_spin_up_time.
+##
+## Linear, because a foot pressing on the tail is closer to constant force over its contact than to
+## anything shaped. Resets whenever no flip is running, so the next pop starts from zero rather than
+## inheriting a finished ramp.
+func _spin_up_scale(delta: float) -> float:
+	if not is_flip_in_progress:
+		_spin_up_elapsed = 0.0
+		return 1.0
+	if flip_spin_up_time <= 0.0:
+		return 1.0
+	_spin_up_elapsed = minf(_spin_up_elapsed + delta, flip_spin_up_time)
+	return _spin_up_elapsed / flip_spin_up_time
+
+## Fraction of full rotation rate during the catch, falling to flip_catch_floor as the deck arrives.
+##
+## Measured in TIME REMAINING rather than degrees remaining, which is what makes it axis-independent:
+## both axes are scaled onto one shared trick duration, so they have the same time left however
+## different their sweeps are, and one factor therefore serves both without disturbing their ratio.
+##
+## Never reaches zero. move_toward with a decaying rate would approach the target asymptotically and
+## the trick would never register as complete, so the floor is what guarantees arrival.
+func _catch_scale() -> float:
+	if flip_catch_time <= 0.0:
+		return 1.0
+	var remaining: float = 0.0
+	if absf(flip_roll_rate) > 1.0:
+		remaining = maxf(remaining,
+			absf(target_board_roll - board_mesh.rotation_degrees.z) / absf(flip_roll_rate))
+	if absf(flip_yaw_rate) > 1.0:
+		remaining = maxf(remaining,
+			absf(target_board_yaw - board_mesh.rotation_degrees.y) / absf(flip_yaw_rate))
+	return lerpf(flip_catch_floor, 1.0, clampf(remaining / flip_catch_time, 0.0, 1.0))
+
+## Advances the precession wobble on BoardMesh's third axis. Visual only - see wobble_max_deg.
+##
+## Phase advances with the deck's OWN turn rate rather than with wall-clock time, so the wobble stays
+## locked to the rotation the way precession actually is: a slow flick tumbles slowly. Amplitude was
+## fixed at the pop from flick intensity and decays over the flight.
+func _advance_wobble(delta: float) -> void:
+	if not (is_flip_in_progress or is_flip_settling) or _wobble_amp <= 0.0:
+		# Nothing turning: bring the deck level rather than leaving a tilt behind. Uses the same decay
+		# constant as the wobble so a caught deck keeps settling at the rate it was already settling.
+		if absf(board_mesh.rotation_degrees.x) > 0.001 and wobble_decay_time > 0.0:
+			board_mesh.rotation_degrees.x = move_toward(board_mesh.rotation_degrees.x, 0.0,
+				wobble_max_deg / wobble_decay_time * delta)
+		return
+	var spin_ref: float = maxf(absf(flip_roll_rate), absf(flip_yaw_rate))
+	_wobble_phase += TAU * (spin_ref / 360.0) * wobble_cycles_per_turn * delta
+	_wobble_elapsed += delta
+	var decay: float = exp(-_wobble_elapsed / wobble_decay_time) if wobble_decay_time > 0.0 else 0.0
+	board_mesh.rotation_degrees.x = _wobble_amp * decay * sin(_wobble_phase)
 
 ## Rotation rate multiplier from how hard the rider flicked, around flick_reference_speed.
 ##
@@ -1406,6 +1526,11 @@ func _evaluate_touchdown_landing() -> void:
 	# rider's weight arrives on the deck in a single frame and easing it reads as floating.
 	foot_rig.settle_now()
 	last_catch_error_deg = 0.0
+	# The wobble is airborne-only, and the rider's weight arriving ends it. Cleared explicitly rather
+	# than left to decay, because nothing advances it once grounded - a residual tilt would simply
+	# stay on the deck. Zeroed before the catch judgement below, which reads roll and yaw only.
+	_wobble_amp = 0.0
+	board_mesh.rotation_degrees.x = 0.0
 
 	# Primo / Incomplete Flip Check.
 	#

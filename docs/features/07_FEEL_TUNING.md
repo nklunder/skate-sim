@@ -38,7 +38,7 @@ A fresh session should not spend time rediscovering these. They are settled and 
 | # | Task | Document | Why this position |
 |---|---|---|---|
 | **07a** ✅ | Carve curvature (`ω = v/R`) | [07a_CARVE_CURVATURE.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07a_CARVE_CURVATURE.md) | **Diagnostic as much as a fix.** Cheapest way to learn whether "flowy" is a physics gap or a presentation gap — **implemented, awaiting the play verdict** |
-| **07b** | Rotation dynamics (spin-up, spin-down, wobble) | [07b_ROTATION_DYNAMICS.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07b_ROTATION_DYNAMICS.md) | Biggest single win on "mechanical", and it is real physics rather than polish |
+| **07b** ✅ | Rotation dynamics (spin-up, spin-down, wobble) | [07b_ROTATION_DYNAMICS.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07b_ROTATION_DYNAMICS.md) | Biggest single win on "mechanical", and it is real physics rather than polish — **items 1–3 done; item 4 (imperfect sync) deliberately not** |
 | **07c** | Presentation (sound, optical flow, FOV) | [07c_PRESENTATION_FEEL.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07c_PRESENTATION_FEEL.md) | Probably a **large** part of the answer — but it would MASK 07a and 07b rather than fix them |
 
 **The ordering is the important part.** 07a first because it answers a question: if carving at
@@ -54,7 +54,10 @@ figures the suites assert:
 - **07a** moves every turn amount in `carve_and_push`. ✅ Done — the moved figures are tabulated in
   [07a](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07a_CARVE_CURVATURE.md), along with the two thresholds re-baselined and the reasoning for each. The other
   three suites came out byte-identical, and `ground_physics` moved exactly one line.
-- **07b** shifts when tricks complete, moving timings in `curb_flip_repro`.
+- **07b** shifts when tricks complete, moving timings in `curb_flip_repro`. ✅ Done — and it moved
+  *only* that suite; the other four are byte-identical. Two thresholds re-baselined, both tabulated
+  in [07b](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07b_ROTATION_DYNAMICS.md) with the reason. **It also needed the pop raised first** to afford the ramps —
+  that is its own commit, and its own re-baseline, kept separate so each has one cause.
 
 That is expected and correct. The discipline still applies: run all five suites, **diff the printed
 numbers**, and state which moved and why. What must not happen is a figure moving silently, or a

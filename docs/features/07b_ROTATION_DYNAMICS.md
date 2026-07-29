@@ -1,5 +1,47 @@
 # 🌀 07b. Rotation Dynamics — the deck starts and stops spinning instantly
-**Status:** 🚧 `PLANNED` | **Parent:** [07_FEEL_TUNING.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07_FEEL_TUNING.md) | **Key file:** `res://scripts/player/SkaterController.gd` (`_impart_deck_rotation`, Layer 3 block, `_advance_flip_settle`)
+**Status:** ✅ `IMPLEMENTED` (items 1–3; item 4 deliberately not done) | **Parent:** [07_FEEL_TUNING.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07_FEEL_TUNING.md) | **Key file:** `res://scripts/player/SkaterController.gd` (`_impart_deck_rotation`, Layer 3 block, `_advance_flip_settle`)
+
+---
+
+## ✅ What shipped
+
+Three new functions in `SkaterController`, all under the `Angular Acceleration` export group:
+
+| | Knob | Default | What it does |
+|---|---|---|---|
+| **1** | `flip_spin_up_time` | $0.05\text{s}$ (3 frames) | `_spin_up_scale()` — rate ramps $0 \to 1$ linearly from the pop |
+| **2** | `flip_catch_time` / `flip_catch_floor` | $0.06\text{s}$ / $0.35$ | `_catch_scale()` — rate eases down into the target |
+| **3** | `wobble_max_deg` / `wobble_cycles_per_turn` / `wobble_decay_time` | $2.5°$ / $1.5$ / $0.35\text{s}$ | `_advance_wobble()` — decaying precession on the free third axis |
+
+**Measured rate profile** (`ramp` column in `curb_flip_repro`), as a fraction of peak per-frame step:
+
+| trick | first frame | middle | last full frame | wobble peak → at landing |
+|---|---|---|---|---|
+| kickflip | $0.33$ | $1.00$ | $0.44$ | $2.04° \to 0.000°$ |
+| tre flip | $0.33$ | $1.00$ | $0.49$ | $1.94° \to 0.000°$ |
+
+$0.33$ is exactly $1/3$ — the first frame of a three-frame ramp. Before this, all three columns were
+$1.00$.
+
+### The three decisions that made it work
+
+- **One shared scalar, never per-axis.** Sync is a rate-*ratio* lock, so `spin` multiplies both axes
+  by the same number. A per-axis envelope would pull a tre flip apart during the ramp and reassemble
+  it afterwards. The `tre flip, ramped in sync` case exists to catch exactly that.
+- **The catch ramp is gated on `not trick.flick_held`.** Physically right — a rider still holding a
+  spin is not catching it — and it is *also* what keeps the free-spin handover invisible. Without the
+  gate the deck would decelerate into the completion of turn 1 and then jump back to full rate for
+  the free spin, which is the one transition the suite says must not be visible. **All five held-
+  rotation cases came out byte-identical** (`air 118`, `step 13.60`), which is the proof.
+- **`flip_catch_floor` must be > 0.** `move_toward` with a rate decaying to zero approaches the
+  target asymptotically and the trick never registers as complete. The floor guarantees arrival.
+
+### Item 4 (imperfect sync) was NOT implemented
+
+Deliberately. The doc calls it optional and tiny, and it is in direct tension with the `sync`
+assertion that both axes stop on the same frame — which this feature has just *added* a second case
+for. Sync-ON is a deliberate design choice for clean tricks; breaking it subtly should be its own
+change, with its own decision about what the suite is then allowed to assert. **Still open.**
 
 ---
 
@@ -63,20 +105,63 @@ subtle enough that a tre flip still reads as landing together.
 - **`flick_rate_min` is tied to `flip_speed_deg`** (a flat-ground kickflip must complete inside 38
   frames of airtime). A ramp eats into that budget; re-check that a soft flick is still landable.
 
-## ✅ Verification
+## ✅ Verification — as run
 
-- **`curb_flip_repro` re-baselines.** Completion frames, catch errors and the flick-intensity
-  thresholds (`roll_stops_before` / `roll_stops_after`) all shift. Expected; state which and why.
-- The **roll-step cap** already fails a stutter, so it will catch a ramp that is applied unevenly.
-- **`foot_rig`'s held case** asserts the clearance hold does not move mid-rotation — a good canary for
-  the leg/rotation interaction.
-- **Probes worth writing:** angular rate per frame across a whole trick (should ramp, hold flat, ramp
-  down — no steps); worst-case deck clearance across the new profile; wobble amplitude against
-  `catch_cone_deg` at touchdown.
+All five suites pass (12/12, 21/21, 17/17, 16/16, 16/16). **`curb_flip_repro` is the only suite that
+moved at all** — `ground_physics`, `carve_and_push`, `foot_rig` and `pop_gesture` are byte-identical
+to the commit before. Two cases were added, so it goes 19 → 21.
+
+**Figures that moved, and why:**
+
+| What | Before | After | Why |
+|---|---|---|---|
+| cone cases `flip_speed` | $486$ | $498$ | The spin-up ramp costs a **constant $8.1°$**, not a proportional amount — which is why all three cone cases moved by exactly the same figure. Ramping $1/3, 2/3, 1$ over three frames loses precisely one frame of rotation, and $486/60 = 8.1$. Errors restored to $36.3 / 52.9 / 86.1$ against the $35.7 / 56.0 / 86.4$ they held originally |
+| `roll_stops_before` | $24$ | $26$ | A hard flick finishes soonest and so has least room to absorb the ~1 frame the ramp adds. The hard/lazy **gap** — which is what the pair actually pins — is untouched at 4+ frames |
+
+**Worst-case deck clearance did not need re-measuring, and that is provable rather than lucky.**
+`_deck_clearance_demand()` is a peak-hold on $\sin(\text{roll})$, so it depends on which roll angles
+the deck *visits*, not on how fast it passes through them. The deck still sweeps the same total roll,
+so it visits the same angles and the peak is identical. `foot_rig` coming out byte-identical —
+including the held-clearance canary at its line 204 — corroborates it. `RiderBody.leg_stiffness` did
+not need slowing either; the rotation is about one frame longer, not meaningfully so.
+
+### 🔬 Falsified before being trusted
+
+Each half of the feature was disabled in turn and the suite confirmed to fail:
+
+| Disabled | Result |
+|---|---|
+| `flip_spin_up_time = 0` | first frame reports $1.00$ of peak — *"the deck starts spinning instantly"* |
+| `flip_catch_time = 0` | last full frame reports $1.00$ of peak — *"the deck stops dead rather than being caught"* |
+| touchdown wobble clear | four cases land with a permanent $0.25$–$0.44°$ tilt on the third axis |
+
+> ⚠️ **A first version of the spin-down assertion was worthless and nearly shipped.** It measured the
+> *last moving* roll step — but that step is a **partial**, clamped by `move_toward` as it lands
+> exactly on the target, so its size is set by where the target happens to fall on the frame grid
+> rather than by the deck's rate. With the catch ramp disabled it still read $0.47$ and **passed**.
+> The assertion now measures the last **full** step, which reads exactly $1.00$ when the ramp is off.
+> Recorded because the failure mode is invisible: the number looked plausible.
+
+**The wobble's real risk turned out not to be the catch cone.** The cone reads roll and yaw only
+(`SkaterController.gd:1401-1403`) and the clearance reads roll only, so a third-axis wobble cannot
+disturb either *structurally* — not merely by being small. What it can do is **outlive the trick**:
+nothing advances it once grounded, so a deck that lands mid-rotation keeps its tilt permanently. That
+guard is asserted on every case rather than only the ramp ones, because a trick that finishes in the
+air has already been wound down by the decay branch and cannot exercise the landing clear.
 
 ## ❓ Open
 
-- Ramp durations. $2$–$3$ frames is the physical estimate for the flick; the catch may want longer.
-- Whether the wobble should also affect the *pitch* the feet clear, or be purely visual on `BoardMesh`.
-  Purely visual is safer to start, but then it is authored decoration rather than physics — worth
-  being honest about which one it is.
+- **Ramp durations** shipped at $0.05\text{s}$ spin-up and $0.06\text{s}$ catch — the physical
+  estimate, now live exports to tune by feel. **The budget they spend was bought by raising the pop**
+  (`jump_impulse` $5.2 \to 6.0$, airtime $39 \to 44$ frames). At the old pop a soft flick had $2.2$
+  frames of slack and the two ramps did not fit; there is now ~$7$. If the pop is ever lowered,
+  `flick_rate_min` has to rise or a soft flick becomes an unavoidable primo.
+- **The wobble is authored decoration, not physics — say so.** It writes `BoardMesh.rotation.x`,
+  which nothing else reads. Feeding it into `_deck_clearance_demand()` would make it real and move
+  the worst-case clearance figure; that is a separate, deliberate decision.
+- **Item 4, imperfect sync** — see above. Not done, and it needs a decision about the `sync`
+  assertion before it can be.
+- **Free-spin still ramps up but never ramps down**, by design: the catch ramp is gated off while the
+  flick is held, and release hands to `_advance_flip_settle()` which carries the deck's own rate as
+  it always did. The settle owns that deceleration; the flip block owns the other one. They can never
+  both act, because they are different branches.
