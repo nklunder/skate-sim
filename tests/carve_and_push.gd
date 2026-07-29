@@ -68,6 +68,21 @@ var _radius_sum: float = 0.0
 var _radius_samples: int = 0
 var _rate_sum: float = 0.0
 const _RADIUS_MIN_SPEED: float = 1.0
+## Frames skipped before radius sampling starts, so the STEER-RATE RAMP is not averaged into the
+## steady state. Grounded steering now eases toward the rate the lean asks for at steer_response,
+## and during that ramp omega is below target, so R = v/omega reads high - measuring the response
+## time rather than the radius. At 20.0 the time constant is 3 frames; 20 is well past settled.
+const _RADIUS_SETTLE_FRAMES: int = 20
+
+## STEER INERTIA. Per-frame heading steps, for the ramp assertion. Grounded steering used to reach
+## full rate on the frame the trigger moved - the only rotation in the sim with no inertia, since
+## airborne body spin always eased in at RiderBody.spin_response. Asserted as a RATIO of the first
+## step to the peak, so it survives retuning steer_response or the radius.
+var _first_turn_step: float = 0.0
+var _max_turn_step: float = 0.0
+## Frames after the lean is released on which the board was STILL turning. Easing out is half the
+## feature: letting go of a carve should unwind it, not stop the turn dead. Zero without the lerp.
+var _turning_after_release: int = 0
 
 # speed: initial roll along the board's own -Z.
 # lean: trigger deflection held for the whole run.
@@ -96,6 +111,13 @@ const CASES := [
 	# is 360 deg in ~2.7 s rather than the ~2.1 s the flat 172 deg/s gave - so 120 frames no longer
 	# completes a lap, and asserting that it does would be asserting the OLD model. The bound stays a
 	# coarse "the carve is not being killed" guard; the radius cases above are what pin the physics.
+	# STEER INERTIA, both directions. The wind-up case reuses a plain carve; the wind-down releases the
+	# trigger at frame 40 and counts how long the board keeps turning. Instant steering scores 1.00
+	# and 0 frames respectively, so one case could not tell the two halves apart - hence both.
+	{"label": "steer eases in @7", "speed": 7.0, "lean": 1.0, "run": 60,
+		"max_first_turn_frac": 0.6, "max_off_axis": 5.0},
+	{"label": "steer eases out @7", "speed": 7.0, "lean": 1.0, "run": 90, "release_at": 40,
+		"min_turning_after_release": 3, "max_off_axis": 5.0},
 	{"label": "carve @7, no push", "speed": 7.0, "lean": 1.0, "run": 120,
 		"turned_min": 190.0, "max_off_axis": 5.0},
 	{"label": "carve @7 + push every 12f", "speed": 7.0, "lean": 1.0, "run": 120, "push_every": 12,
@@ -190,6 +212,9 @@ func _start_case() -> void:
 	_radius_sum = 0.0
 	_radius_samples = 0
 	_rate_sum = 0.0
+	_first_turn_step = 0.0
+	_max_turn_step = 0.0
+	_turning_after_release = 0
 
 func _physics_process(delta: float) -> void:
 	if _reported or _skater == null:
@@ -222,8 +247,10 @@ func _physics_process(delta: float) -> void:
 			return
 	_frame += 1
 
-	# Rewritten every tick: _poll_inputs() zeroes lean with no device attached.
-	_skater.rider.lean = float(c["lean"])
+	# Rewritten every tick: _poll_inputs() zeroes lean with no device attached. A release case drops it
+	# to zero partway through, to exercise the wind-down rather than the wind-up.
+	var released: bool = c.has("release_at") and _frame > int(c["release_at"])
+	_skater.rider.lean = 0.0 if released else float(c["lean"])
 	if c.has("manual_hold"):
 		# Trailing stick held down: the balance input that puts the deck up on one truck.
 		# The poller must be silenced or TrickState never sees it - it is a CHILD of RiderInput and
@@ -241,10 +268,20 @@ func _physics_process(delta: float) -> void:
 	_turned += swept
 	_prev_heading = heading
 
+	var step: float = absf(swept)
+	if not released:
+		if _first_turn_step <= 0.0 and step > 0.0001:
+			_first_turn_step = step
+		_max_turn_step = maxf(_max_turn_step, step)
+	elif step > 0.02:
+		# Still turning after the trigger came home. Threshold is per FRAME, so 0.02 deg is a board
+		# that has genuinely not stopped rather than float noise.
+		_turning_after_release += 1
+
 	# R = v / omega, per frame. Constant radius across a decaying speed is the whole claim.
 	var planar_speed: float = Vector3(_skater.velocity.x, 0.0, _skater.velocity.z).length()
 	var rate: float = absf(swept) / delta
-	if planar_speed >= _RADIUS_MIN_SPEED and rate > 0.01 and _skater.is_grounded:
+	if _frame > _RADIUS_SETTLE_FRAMES and planar_speed >= _RADIUS_MIN_SPEED and rate > 0.01 and _skater.is_grounded:
 		_radius_sum += planar_speed / deg_to_rad(rate)
 		_rate_sum += rate
 		_radius_samples += 1
@@ -304,10 +341,25 @@ func _finish_case() -> void:
 	var detail: String = "turned %5.1f deg | offAxis %4.1f (settled %4.1f) | peak %4.2f m/s | posJump %.4f m | paced %d/%d" % [
 		turned, _max_off_axis, _settled_off_axis, _max_speed, _max_pos_jump, _realigning_frames, _frame]
 
+	# STEER INERTIA (07a's deferred half). Bushings are rubber and the rider is a mass, so neither
+	# arrives at a new lean angle in one frame. Without the lerp the first frame IS the peak.
+	if c.has("max_first_turn_frac") and _max_turn_step > 0.0:
+		var ramp: float = _first_turn_step / _max_turn_step
+		detail += " | steerRamp %.2f" % ramp
+		if ramp > float(c["max_first_turn_frac"]):
+			problems.append("first steering frame was %.2f of peak rate (limit %.2f) - the board snaps to full lean" % [
+				ramp, float(c["max_first_turn_frac"])])
+	# ...and it must ease out too, or letting go of a carve stops the turn dead.
+	if c.has("min_turning_after_release"):
+		detail += " | turnedAfterRelease %d f" % _turning_after_release
+		if _turning_after_release < int(c["min_turning_after_release"]):
+			problems.append("board stopped turning %d frames after the lean was released (expected at least %d) - no wind-down" % [
+				_turning_after_release, int(c["min_turning_after_release"])])
+
 	# The carve model itself: lean sets the radius, speed sets the rate.
 	if c.has("radius_m"):
 		detail += " | R %.2f m @ %5.1f deg/s" % [mean_radius, mean_rate]
-		if _radius_samples < int(c["run"]) / 2:
+		if _radius_samples < (int(c["run"]) - _RADIUS_SETTLE_FRAMES) / 2:
 			problems.append("only %d radius samples in %d frames - the carve never sustained" % [
 				_radius_samples, _frame])
 		elif absf(mean_radius - float(c["radius_m"])) > float(c.get("radius_tol", 0.25)):

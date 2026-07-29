@@ -130,10 +130,13 @@ its own rate specifically so it would not be.
   than live. 06 records the front/rear split question and why one slider over two stored values.
 - ~~Whether to keep a small floor~~ — **decided:** no floor. The stationary kickturn owns the range
   below `kickturn_max_speed`, and it keeps its own flat rate precisely so it can.
-- **Deferred, and deliberately:** grounded steering is still applied instantly while airborne body
-  spin lerps at `spin_response = 20.0`. One lerp on `turn_rate` closes it. Held back so the
-  `carve_and_push` re-baseline had exactly one cause; it will move the swept-degree figures again
-  (a ramp-in shaves off total swept), but nothing structural.
+- ✅ **The deferred inertia lerp is now done.** `steer_response = 20.0`, matching
+  `RiderBody.spin_response` — grounded steering was the one rotation in the sim arriving instantly.
+  It eases **both** ways, which turned out to be half the value: releasing a carve now unwinds over
+  ~12 frames instead of stopping the turn dead. Two cases pin it (`steer eases in` / `steer eases
+  out`), and both fail against instant steering, reporting a $1.00$ ramp and $1$ frame of wind-down.
+  The radius probe needed a 20-frame settle window, or it averaged the ramp into the steady state and
+  measured `steer_response` as much as the radius ($3.00 \to 3.18\text{ m}$ before the fix).
 - **Rolling fakie still steers the way it always did.** `speed` is the unsigned planar magnitude, so
   a board rolled backwards turns the same way it would rolling forwards. A real board reverses. Left
   alone because the sign has consequences for `_travel_axis_sign` and the landing residual, and that

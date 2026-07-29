@@ -52,9 +52,22 @@ var surface_hit: SurfaceProbe.Hit = SurfaceProbe.Hit.new()
 ## 3.0 rad/s is the rate the old shared `turn_speed` produced, kept exactly so the kickturn branch -
 ## and the trailing-axle anchoring that only it exercises - is unchanged by the carve work.
 @export var kickturn_rate: float = 3.0
+## How fast the grounded turn rate chases the rate the rider's lean is asking for, per second.
+##
+## Matches RiderBody.spin_response deliberately: airborne body spin has always eased in at 20.0, and
+## the ground snapping instantly was the asymmetry. Higher is twitchier and approaches the old
+## instant behaviour; lower makes the board feel heavier to set on edge and slower to release.
+##
+## This is also the RESPONSE half of truck tightness - tight bushings are sluggish and stable, loose
+## ones twitchy - so when hardware customisation lands (06) one tightness number should drive this
+## and carve_radius_m together rather than them becoming independent sliders.
+@export var steer_response: float = 20.0
 var manual_timer: float = 0.0
 var is_grounded: bool = true
 var _is_carve_latched: bool = false
+## Live grounded turn rate, eased toward the rate the lean is asking for. See the lerp in
+## _apply_steering() for why the ground needs this and the air already had it.
+var _steer_rate: float = 0.0
 
 @export_category("Deck Catch Physics")
 ## Shoe-rubber-on-griptape friction coefficient. A rider can stamp an off-axis deck flat while its
@@ -988,27 +1001,36 @@ func _apply_push_inputs() -> void:
 
 ## Step 4. Steering and stationary rotation via trigger lean (RT - LT), on pavement only.
 func _apply_steering(delta: float) -> void:
-	if not is_grounded or abs(rider.lean) <= 0.05:
+	# Airborne the ground rate is DROPPED rather than eased out. Steering is the trucks working
+	# against the pavement, so with nothing in contact there is no momentum to carry - unlike a lean
+	# released while still rolling, which does ease out below.
+	if not is_grounded:
 		_is_carve_latched = false
+		_steer_rate = 0.0
 		return
 
 	var speed: float = Vector3(velocity.x, 0.0, velocity.z).length()
-	# Latch continuous carving if initiated above kickturn threshold, remaining in carve mode down to near-stall (< 0.05 m/s)
-	if speed >= kickturn_max_speed:
-		_is_carve_latched = true
-	elif speed < 0.05:
-		_is_carve_latched = false
+	var leaning: bool = absf(rider.lean) > 0.05
+	# Latch continuous carving if initiated above kickturn threshold, remaining in carve mode down to
+	# near-stall (< 0.05 m/s). Only re-evaluated while the rider is actually leaning: once they let
+	# go, the regime must stay put until the rate has decayed out, or a carve released at speed would
+	# finish its wind-down through the KICKTURN branch and translate the rig.
+	if leaning:
+		if speed >= kickturn_max_speed:
+			_is_carve_latched = true
+		elif speed < 0.05:
+			_is_carve_latched = false
 
 	# How hard the rider is leaning, times however much of their weight is actually available to lean
 	# WITH - see _lean_authority(), which is where pop loading, pushing, manuals and later grinds all
 	# register their cost. Damps STEERING only, never the push impulse: gating a gameplay term on a
 	# body state is fine, gating it on an ANIMATION is not.
-	var effective_lean: float = rider.lean * _lean_authority()
-	var turn_rate: float
+	var effective_lean: float = rider.lean * _lean_authority() if leaning else 0.0
+	var target_rate: float
 
 	if not _is_carve_latched:
 		# Muscle, not wheels - see kickturn_rate. Stays a flat rate where carving cannot.
-		turn_rate = effective_lean * kickturn_rate
+		target_rate = effective_lean * kickturn_rate
 		# Stationary Kickturn: anchor the rotation on the axle that is ON THE GROUND, so the back
 		# tyres stay locked to the pavement while the nose swings round.
 		#
@@ -1016,12 +1038,6 @@ func _apply_steering(delta: float) -> void:
 		# frame, so it has to be carried across - which is the whole reason pivot_z_to_rig() exists.
 		# Deriving the axle without it anchored the LEADING truck in switch, and since a kickturn
 		# lifts the leading trucks, that made the airborne one the pivot (BUG_ARCHIVE #6).
-		var axle_local_pos := Vector3(0.0, -(ride_height - wheel_radius),
-			pivot_z_to_rig(trailing_axle_z()))
-		var axle_world_before: Vector3 = to_global(axle_local_pos)
-		rotate_y(-turn_rate * delta)
-		var axle_world_after: Vector3 = to_global(axle_local_pos)
-		global_position += (axle_world_before - axle_world_after)
 	else:
 		# Carving: lean sets a turn RADIUS, and omega = v / R follows. Lean scales CURVATURE rather
 		# than radius, because lean maps to a truck STEER ANGLE and curvature is what is linear in
@@ -1036,8 +1052,33 @@ func _apply_steering(delta: float) -> void:
 		# board reverses its steering when rolled backwards, but that is a separate change with its
 		# own sign consequences (_travel_axis_sign, the landing residual) and is not part of 07a.
 		var radius: float = rider.board_config.carve_radius_m if is_instance_valid(rider.board_config) else 3.0
-		turn_rate = speed * effective_lean / maxf(radius, 0.01)
-		rotate_y(-turn_rate * delta)
+		target_rate = speed * effective_lean / maxf(radius, 0.01)
+
+	# THE LERP. Bushings are rubber and the rider is a mass: neither the deck nor the body arrives at
+	# a new lean angle in one frame. Airborne body spin has always eased in at RiderBody.spin_response,
+	# so a ground steer that snapped to full rate instantly was the one rotation in the sim with no
+	# inertia at all, and that asymmetry is what reads as the board being weightless underfoot.
+	#
+	# Eases BOTH ways, which is half the point: letting go of a carve unwinds it over a few frames
+	# rather than stopping the turn dead.
+	_steer_rate = lerpf(_steer_rate, target_rate, minf(steer_response * delta, 1.0))
+	if absf(_steer_rate) < 0.001:
+		_steer_rate = 0.0
+		if not leaning:
+			_is_carve_latched = false
+		return
+
+	if not _is_carve_latched:
+		# Anchored on the axle that is ON THE GROUND, so the back tyres stay locked to the pavement
+		# while the nose swings round.
+		var axle_local_pos := Vector3(0.0, -(ride_height - wheel_radius),
+			pivot_z_to_rig(trailing_axle_z()))
+		var axle_world_before: Vector3 = to_global(axle_local_pos)
+		rotate_y(-_steer_rate * delta)
+		var axle_world_after: Vector3 = to_global(axle_local_pos)
+		global_position += (axle_world_before - axle_world_after)
+	else:
+		rotate_y(-_steer_rate * delta)
 
 ## Step 5. The pop: vertical impulse, kicktail pitch, and the deck rotation targets for the trick.
 func _execute_pop() -> void:
