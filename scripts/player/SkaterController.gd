@@ -91,7 +91,10 @@ var last_catch_error_deg: float = 0.0
 ## snap work off global_position, so a dip here cannot disturb them. The camera hangs off SkaterRoot
 ## and so does not dip, which is what makes the compression readable rather than just a screen shake.
 @export var landing_dip_max: float = 0.04 # Metres of compression at or above the reference impact.
-@export var landing_dip_ref_speed: float = 6.0 # Impact speed producing full compression.
+## Impact speed producing full compression. Kept ABOVE jump_impulse on purpose: a flat-ground pop
+## lands at exactly its takeoff speed, so a reference equal to it would saturate every flat landing
+## at maximum dip and leave the grading with nothing to say except on drops. Raised with the pop.
+@export var landing_dip_ref_speed: float = 7.0
 @export var landing_dip_recover: float = 9.0 # Rate the suspension extends back out.
 var _landing_dip: float = 0.0
 
@@ -113,7 +116,17 @@ var _landing_dip: float = 0.0
 var _travel_axis_sign: float = 1.0
 
 @export_category("Aerial & Jump Physics")
-@export var jump_impulse: float = 5.2
+## Takeoff vertical speed, in m/s. Peak height is v^2/(2g) and airtime is 2v/g, so raising THIS
+## rather than lowering gravity_accel buys height quadratically and airtime linearly - a poppier
+## board rather than a floatier one. Lowering gravity instead would scale both equally and would
+## also move which gradients hold the skater, since that threshold is asin(rolling_friction/gravity).
+##
+## At 6.0 with gravity_accel = 16: peak 1.125 m, airtime 45 frames at 60 Hz.
+##
+## AIRTIME IS THE ROTATION BUDGET. A soft flick turns at flick_rate_min * flip_speed_deg and has to
+## bring the deck round inside one hop, so every frame here is a frame the flip and catch ramps can
+## spend - see flick_rate_min, which is the field that has to rise if this ever falls.
+@export var jump_impulse: float = 6.0
 ## Maximum sideways jump velocity (in m/s) imparted when aiming the pop thumbstick off-center.
 @export var max_lateral_pop_impulse: float = 1.5
 ## Slight natural board yaw offset (in degrees) imparted during directed lateral jumps.
@@ -143,11 +156,16 @@ var _travel_axis_sign: float = 1.0
 ## lazily and risk an incomplete trick, not guarantee a primo - the rider should be able to see it
 ## failing and still catch it.
 ##
-## IT IS TIED TO flip_speed_deg, and cannot be tuned independently of it. A flat-ground kickflip has
-## 38 frames of airtime, so the deck must turn at 568 deg/s or better to come round at all - and the
-## slowest a flick can be is flick_rate_min * flip_speed_deg. At 816 that floor is 0.70; anything
-## under it makes a soft flick an unavoidable primo rather than a recoverable mistake. Slow the deck
-## further and this has to rise with it.
+## IT IS TIED TO flip_speed_deg AND TO jump_impulse, and cannot be tuned independently of either. A
+## flat-ground kickflip has 44 frames of airtime at jump_impulse 6.0, so the deck must turn at
+## 491 deg/s or better to come round at all - and the slowest a flick can be is
+## flick_rate_min * flip_speed_deg. At 816 that floor is 0.60; anything under it makes a soft flick
+## an unavoidable primo rather than a recoverable mistake.
+##
+## Slow the deck, or lower the pop, and this has to rise with it. The margin at 0.72 is 587 deg/s
+## against a 491 requirement - 36.8 frames of rotation inside 44 of hang time, so about 7 frames
+## spare. That slack is what the spin-up and catch ramps spend; it was 2.2 frames before the pop was
+## raised, which was not enough for both.
 @export var flick_rate_min: float = 0.72
 @export var flick_rate_max: float = 1.6
 ## How far a released deck may UNWIND to reach a resting orientation instead of carrying on to the

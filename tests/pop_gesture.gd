@@ -34,12 +34,22 @@ const TEST_WORLD := preload("res://scenes/TestWorld.tscn")
 # pre         optional harder load held for the first 10 frames, then eased to `hold`
 # wait        frames spent at `hold` before the flick is thrown
 # flick_over  frames the flick takes to travel out (a slow throw is the second failure mode)
-# min_h/max_h bounds on jump height in metres
+# min_h/max_h bounds on jump height, as a FRACTION of a full-scale pop.
+#
+# Fractions rather than metres, because every one of these cases is really asserting a pop SCALE -
+# "the rider loaded fully, so they must get a full pop", "a sloppy throw keeps most of it", "a light
+# hold barely leaves the ground". Written in metres they were sized against one particular
+# jump_impulse and re-baselined wholesale the moment the pop was tuned, which taught nothing: the
+# recogniser was never what changed. _full_pop_height() derives the reference from the physics, so
+# these now track jump_impulse and gravity_accel on their own.
+#
+# The upper bounds sit just over 1.0 on purpose. A full pop IS the ceiling, and the slack is for the
+# apex being sampled per frame rather than solved for.
 const CASES := [
 	# The reported failure. The thumb is already home when the flick lands; the rider loaded fully,
 	# so they must get a full pop.
 	{"label": "full load, thumb home at flick", "pre": 1.0, "hold": 0.0, "wait": 0,
-		"flick_over": 2.0, "min_h": 0.70, "max_h": 0.90},
+		"flick_over": 2.0, "min_h": 0.83, "max_h": 1.07},
 	# The second failure. A slow throw used to drop the load mid-gesture and pop not at all.
 	#
 	# The bound is deliberately NOT full height. Releasing the load outright and then taking 12
@@ -48,12 +58,12 @@ const CASES := [
 	# latch. What is pinned here is that the gesture survives and produces a real pop: no cliff, and
 	# never zero. Timing is forgiven, not made free.
 	{"label": "full load, slow flick throw", "pre": 1.0, "hold": 0.0, "wait": 0,
-		"flick_over": 12.0, "min_h": 0.30, "max_h": 0.90},
+		"flick_over": 12.0, "min_h": 0.35, "max_h": 1.07},
 	# Forgiveness must not swallow the graded response underneath it.
 	{"label": "steady gentle hold", "hold": 0.45, "wait": 0, "flick_over": 2.0,
-		"min_h": 0.005, "max_h": 0.10},
+		"min_h": 0.006, "max_h": 0.12},
 	{"label": "steady light hold (ledge drop)", "hold": 0.25, "wait": 0, "flick_over": 2.0,
-		"min_h": 0.0, "max_h": 0.01},
+		"min_h": 0.0, "max_h": 0.012},
 	# THE DIRECTIONAL POP. Popping from a standstill with the foot in a side pocket leaps the rider
 	# over a metre per second STRAIGHT SIDEWAYS. That is nearly perpendicular to the deck, so anything
 	# deriving a heading from raw velocity gets noise - leading_foot flipped mid-flight, and since it
@@ -62,20 +72,20 @@ const CASES := [
 	# axis sign, and this). Also pins the direction the deck kicks, which a sign inversion in the
 	# torsion routing reversed with nothing to catch it.
 	{"label": "left pocket pop, stationary", "hold": 1.0, "wait": 0, "flick_over": 2.0,
-		"speed": 0.0, "pocket_x": -0.56, "expect_yaw_sign": 1.0, "min_h": 0.60, "max_h": 0.90},
+		"speed": 0.0, "pocket_x": -0.56, "expect_yaw_sign": 1.0, "min_h": 0.71, "max_h": 1.07},
 	{"label": "right pocket pop, stationary", "hold": 1.0, "wait": 0, "flick_over": 2.0,
-		"speed": 0.0, "pocket_x": 0.56, "expect_yaw_sign": -1.0, "min_h": 0.60, "max_h": 0.90},
+		"speed": 0.0, "pocket_x": 0.56, "expect_yaw_sign": -1.0, "min_h": 0.71, "max_h": 1.07},
 	# The same pop with the deck's kick-out yaw DISABLED, which is the case that actually pins the
 	# stance derivation. With the kick present, travel is a hair off perpendicular and the fore/aft
 	# dot-product comparison breaks in the deck's favour by luck; at zero it is a true tie and a
 	# stance read from raw velocity is a coin flip. Deriving it from the along-axis sign instead is
 	# what makes it deterministic, and this is the case that fails without it.
 	{"label": "lateral pop, no deck kick", "hold": 1.0, "wait": 0, "flick_over": 2.0,
-		"speed": 0.0, "pocket_x": -0.56, "lateral_yaw": 0.0, "min_h": 0.60, "max_h": 0.90},
+		"speed": 0.0, "pocket_x": -0.56, "lateral_yaw": 0.0, "min_h": 0.71, "max_h": 1.07},
 	# The compression must SPRING BACK, not latch. A rider who loads hard, eases off and then sits
 	# there has let the tail up; flicking later is a gentle pop, not a stored full one.
 	{"label": "full load, eased off, flicked late", "pre": 1.0, "hold": 0.30, "wait": 30,
-		"flick_over": 2.0, "min_h": 0.0, "max_h": 0.06},
+		"flick_over": 2.0, "min_h": 0.0, "max_h": 0.072},
 ]
 
 const STANCES := [
@@ -185,6 +195,14 @@ func _physics_process(_delta: float) -> void:
 	elif _frame > 140:
 		_finish_case()
 
+## Apex a full-scale pop reaches, from the physics rather than a recorded metre figure: v^2 / 2g.
+## Every height bound is a fraction of this, so tuning jump_impulse or gravity_accel cannot silently
+## re-baseline a suite whose subject is the GESTURE RECOGNISER and not the ballistics.
+func _full_pop_height() -> float:
+	if _skater == null or _skater.gravity_accel <= 0.0:
+		return 1.0
+	return (_skater.jump_impulse * _skater.jump_impulse) / (2.0 * _skater.gravity_accel)
+
 func _finish_case() -> void:
 	var c: Dictionary = CASES[_case]
 	var st: Dictionary = STANCES[_stance]
@@ -195,10 +213,13 @@ func _finish_case() -> void:
 	else:
 		if _dropped:
 			problems.append("load dropped to NONE mid-gesture before the flick landed")
-		if _peak < float(c["min_h"]):
-			problems.append("height %.3f below %.3f - loaded but got no pop for it" % [_peak, c["min_h"]])
-		if _peak > float(c["max_h"]):
-			problems.append("height %.3f above %.3f - more pop than the rider asked for" % [_peak, c["max_h"]])
+		var frac: float = _peak / _full_pop_height()
+		if frac < float(c["min_h"]):
+			problems.append("height %.3f m = %.3f of a full pop, below %.3f - loaded but got no pop for it" % [
+				_peak, frac, c["min_h"]])
+		if frac > float(c["max_h"]):
+			problems.append("height %.3f m = %.3f of a full pop, above %.3f - more pop than the rider asked for" % [
+				_peak, frac, c["max_h"]])
 		if _lead_flipped:
 			problems.append("leading_foot flipped during the trick - the kickturn axle swaps with it")
 		if _axle_flipped:
@@ -208,8 +229,8 @@ func _finish_case() -> void:
 				% [_peak_yaw, float(c["expect_yaw_sign"])])
 
 	var ok: bool = problems.is_empty()
-	print("%-34s %-8s %s | scale %.2f | height %.3f m" % [
-		c["label"], st["label"], "PASS" if ok else "FAIL", _scale, _peak])
+	print("%-34s %-8s %s | scale %.2f | height %.3f m (%.2f of full)" % [
+		c["label"], st["label"], "PASS" if ok else "FAIL", _scale, _peak, _peak / _full_pop_height()])
 	for p in problems:
 		_failures += 1
 		print("      -> %s" % p)

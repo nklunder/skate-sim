@@ -60,18 +60,25 @@ const CASES := [
 		"flip": true, "scoop": 0, "expect": "Landed Kickflip!"},
 	{"label": "ollie -> curb, manual", "pos": Vector3(4.0, 0.078, 2.0),
 		"flip": false, "scoop": 0, "expect": "Landed directly into Manual!", "hold_manual": true},
+	# THE CONE, in three regimes. What each case pins is the deck ERROR at touchdown and which side
+	# of catch_cone_deg it lands, NOT any particular ledge height - the ledge is only how airtime is
+	# shortened. So when the pop was raised (jump_impulse 5.2 -> 6.0) and all three gained ~8 frames
+	# of hang time, the fix was to slow the deck rather than to raise the obstacles: flip_speed is
+	# already a per-case knob, while the 0.8 m platform is fixed world geometry. 608 -> 486 restores
+	# ~36 / ~52 / ~85 deg of error, which is where these sat before.
+	#
 	# Sketchy but rideable: deck is ~36 deg short, inside the cone, so the settle runs several
 	# frames. This is the case that actually exercises the no-teleport guarantee.
 	{"label": "kickflip -> 0.43m ledge", "pos": Vector3(20.0, 0.078, 6.0), "ledge": 0.43,
-		"flip": true, "scoop": 0, "expect": "Landed Kickflip!", "flip_speed": 608.0},
+		"flip": true, "scoop": 0, "expect": "Landed Kickflip!", "flip_speed": 486.0},
 	{"label": "kickflip -> 0.43m, manual", "pos": Vector3(20.0, 0.078, 6.0), "ledge": 0.43,
-		"flip": true, "scoop": 0, "expect": "Landed directly into Manual!", "hold_manual": true, "flip_speed": 608.0},
+		"flip": true, "scoop": 0, "expect": "Landed directly into Manual!", "hold_manual": true, "flip_speed": 486.0},
 	# Past the cone: deck arrives ~56 deg over, foot would slide off the rail. Must still bail.
 	{"label": "kickflip -> 0.55m ledge", "pos": Vector3(20.0, 0.078, 6.0), "ledge": 0.55,
-		"flip": true, "scoop": 0, "expect": "BAIL! (Primo Crash / Incomplete Flip)", "flip_speed": 608.0},
+		"flip": true, "scoop": 0, "expect": "BAIL! (Primo Crash / Incomplete Flip)", "flip_speed": 486.0},
 	# Deck arrives ~213 deg round - genuinely upside down. Must still bail.
 	{"label": "kickflip -> 0.8m platform", "pos": Vector3(-10.0, 0.078, -10.0),
-		"flip": true, "scoop": 0, "expect": "BAIL! (Primo Crash / Incomplete Flip)", "flip_speed": 608.0},
+		"flip": true, "scoop": 0, "expect": "BAIL! (Primo Crash / Incomplete Flip)", "flip_speed": 486.0},
 	# Combined-axis tricks: the sync assertion. Both axes must stop turning on the same frame.
 	# No exact name is asserted - these inject a signature directly, so the resolved name is
 	# TrickNames' business and would make this suite fail for unrelated naming changes. Landing at
