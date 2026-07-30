@@ -72,24 +72,19 @@ func poll(delta: float) -> Sample:
 	if lt < 0.05 and rt < 0.05:
 		lt = float(Input.is_physical_key_pressed(KEY_Q))
 		rt = float(Input.is_physical_key_pressed(KEY_E))
-	# Reported LINEAR, and deliberately so. `lean` is a physical request - a truck steer angle on the
-	# ground, a muscular torque in the air - and this layer's job is to say what the hardware read, not
-	# to shape how it feels. A perceptual curve here is charged to EVERY consumer, including the ones
-	# that never asked for it.
+	# REPORTED LINEAR - DO NOT ADD A RESPONSE CURVE HERE. `lean` is a physical request (a truck steer
+	# angle on the ground, a muscular torque in the air), and this layer's job is to say what the
+	# hardware read. A curve here is charged to every consumer, including those that never asked.
 	#
-	# It was an exponent of 2.2, added for mid-air spin styling, and carving paid for it. A carve is
-	# omega = v / R with R = carve_radius_m / lean, so the curve is a curve on CURVATURE: a
-	# half-pulled trigger drew a 13.8 m arc where the model says 6 m, and it took ~0.85 of travel to
-	# reach a 4 m one. That is the "board does nothing, then suddenly bites" band, and it survived 07a
-	# untouched because 07a fixed the model and this is upstream of it.
+	# A 2.2 exponent lived here once for mid-air spin styling and carving paid for it. A carve is
+	# omega = v / R with R = carve_radius_m / lean, so a curve here is a curve on CURVATURE: half
+	# trigger drew a 13.8 m arc against a 6 m model - the "board does nothing, then suddenly bites"
+	# band. `carve_and_push` cannot catch it either, because the suite writes `rider.lean` directly and
+	# so asserts the linear law this line was quietly breaking for the player. That is the hazard of
+	# shaping a physical quantity at the device boundary: nothing downstream can see it.
 	#
-	# `carve_and_push` pins "half lean must DOUBLE the radius" - lean maps to a steer angle and
-	# curvature is what is linear in that angle - but it writes `rider.lean` directly, so the suite has
-	# been asserting the linear law while this line quietly broke it for the player. That is the whole
-	# hazard of shaping a physical quantity at the device boundary: nothing downstream can see it.
-	#
-	# If mid-air spin genuinely wants desensitising, it belongs on the single line in
-	# RiderBody.advance_spin() that consumes it, where it costs the ground nothing.
+	# If mid-air spin wants desensitising, it belongs on the one line in RiderBody.advance_spin() that
+	# consumes it, where it costs the ground nothing.
 	s.lean = rt - lt
 
 	# Chase camera side select on the d-pad. Reports only what was pressed THIS frame; holding

@@ -14,10 +14,9 @@ extends Resource
 ## LIVE - the turn RADIUS in metres at full lean, which is what a truck actually sets.
 ##
 ## Bushings deflect by an amount set by how hard the rider leans; that deflection is a steering
-## angle, and the steering angle with the wheelbase gives a radius. The angular rate then falls out
-## as omega = v / R, so the same lean carves the same arc at any speed. This replaced a flat
-## `turn_speed` in rad/s, which turned at ~172 deg/s whether the skater was doing 7 m/s or 1 - about
-## right when fast and 4x too quick at walking pace, which is what made slow riding read as darty.
+## angle, and the steering angle with the wheelbase gives a radius. The angular rate falls out as
+## omega = v / R, so the same lean carves the same arc at any speed - where a flat rate in rad/s is
+## about right when fast and 4x too quick at walking pace, which is what makes slow riding read darty.
 ##
 ## Real boards vary enormously with truck tightness, so this is the natural knob for the hardware
 ## customisation work. Smaller is tighter. Lean scales CURVATURE, not radius: half lean is a 6 m arc.

@@ -31,21 +31,16 @@ enum PopState { NONE, LOADING_OLLIE, LOADING_NOLLIE, POPPED }
 ## How far the OPPOSITE stick must be thrown to release the pop.
 @export_range(0.1, 1.0) var flick_min_deflection: float = 0.35
 ## How far the stick must STILL be deflected for the flick to count as held, sustaining the rotation
-## into a double or triple. Deliberately higher than flick_min_deflection.
+## into a double or triple. DELIBERATELY HIGHER than flick_min_deflection: reuse that threshold and
+## any stick position that could have thrown the flick also counts as still asking for more, so a
+## thumb following through gets the rider a double they never asked for.
 ##
-## Reusing the trigger threshold for the sustain is what made held tricks fire by accident: any stick
-## position that could have THROWN the flick also counted as still asking for more, so a thumb
-## following through - or simply resting part-way out - kept the deck spinning. Turn 1 completes about
-## 27 frames after the pop, so the rider had under half a second to get back under 0.35 or they got a
-## double they never asked for.
+## Same shape as the two-stage balance law on holds_*_balance() - entering a state and sustaining it
+## are different requests and should not share a number. Here the sustain is the STRICTER of the two,
+## because the failure guarded is an accidental hold rather than an accidental drop.
 ##
-## Same shape as the two-stage balance law on holds_*_balance(), for the same reason: entering a state
-## and sustaining it are different requests and should not share a number. Here the sustain is the
-## STRICTER of the two, because the failure being guarded is an accidental hold rather than an
-## accidental drop.
-##
-## Raise it if doubles still fire unintentionally; lower it if deliberately holding one feels like a
-## fight. Below flick_min_deflection it stops doing anything, since the flick could not have fired.
+## Raise it if doubles still fire unintentionally; lower it if holding one feels like a fight. Below
+## flick_min_deflection it stops doing anything, since the flick could not have fired.
 @export_range(0.1, 1.0) var flick_hold_min_deflection: float = 0.60
 ## How closely the stick must still point along the direction it was flicked for the flick to count
 ## as HELD, as a dot product. 1.0 demands the exact direction; 0.6 allows about 53 degrees either way.
@@ -73,31 +68,27 @@ enum PopState { NONE, LOADING_OLLIE, LOADING_NOLLIE, POPPED }
 @export var scoop_direction_min_deg: float = 15.0
 ## How fast a remembered flick speed bleeds away, in deflection-units per second per second.
 ##
-## `flick_speed` was a SINGLE-FRAME sample taken on whichever frame the flick happened to cross
-## flick_min_deflection - the same fragility that made the pop impulse depend on thumb timing. A
-## throw is several frames long and its speed is not constant across them, so one sample is noise.
-## Peak-held per stick instead, and the peak bleeds so it measures THIS flick rather than one from
-## two seconds ago.
+## PEAK-HELD per stick, never a single-frame sample: a throw is several frames long and its speed is
+## not constant across them, so one sample taken on whichever frame crossed flick_min_deflection is
+## noise. The peak bleeds so it measures THIS flick rather than one from two seconds ago.
 @export var flick_speed_decay: float = 60.0
 
 ## How fast a loaded tail springs back once the thumb starts coming home, in stick units per second.
 ##
-## THE COMPRESSION IS PHYSICAL STATE, not a live readout of the thumb, and that distinction is the
-## whole fix for flip tricks failing intermittently. A rider pops by flicking the OPPOSITE stick, so
-## both thumbs are moving at once and the loading one is often already on its way back when the
-## flick lands. Impulse was read live at that instant, which made pop height a function of thumb
-## SYNCHRONISATION rather than of how hard the rider actually loaded:
+## THE COMPRESSION IS PHYSICAL STATE, not a live readout of the thumb. A rider pops by flicking the
+## OPPOSITE stick, so both thumbs move at once and the loading one is often already on its way back
+## when the flick lands. Read live at that instant, pop height becomes a function of thumb
+## SYNCHRONISATION rather than of how hard the rider loaded:
 ##
 ##     load stick at flick   1.00   0.70   0.40   0.10   0.00
 ##     jump height (m)       0.80   0.80   0.19   0.01   0.00  <- board never leaves the ground
 ##
-## About two frames of timing separated a full ollie from nothing, and the trick still REGISTERED -
-## the deck flipped, the name resolved - it simply had no height. That is what "sometimes it just
-## doesn't pop" is.
+## Two frames of timing separate a full ollie from nothing, and the trick still REGISTERS - the deck
+## flips, the name resolves - it simply has no height. That is "sometimes it just doesn't pop".
 ##
-## Physically the tail is already compressed by the time the flick happens; letting go of the stick
-## does not uncompress it instantly. At 2.5 a full load stays worth a full pop for ~7 frames and
-## survives as a load at all for ~19, so a flick thrown any time in that window pops as asked.
+## Physically the tail is already compressed by the time the flick happens, and letting go of the
+## stick does not uncompress it instantly. At 2.5 a full load stays worth a full pop for ~7 frames
+## and survives as a load at all for ~19.
 @export var load_release_rate: float = 2.5
 
 @export_category("Directional Pop")
@@ -124,15 +115,12 @@ var pop_impulse_scale: float = 1.0
 var pop_lateral_impulse_ratio: float = 0.0
 ## True while the stick that FIRED the pop has not yet returned to neutral.
 ##
-## A rider pops by flicking the OPPOSITE stick, so the loading stick is still buried at takeoff.
-## Airborne pitch read that as a live request and held the deck ~24 deg nose-up for the whole
-## flight, landing them in a manual they never asked for - instead of levelling through apex.
-## Consuming the load at the pop means the stick has to be RELEASED and re-applied before it steers
-## pitch again, which is also what the rider's foot actually does: you do not keep pressing the tail
-## once the board has left the ground.
+## A rider pops by flicking the OPPOSITE stick, so the loading stick is still buried at takeoff. Read
+## as a live pitch request that holds the deck ~24 deg nose-up for the whole flight and lands the
+## rider in a manual they never asked for. Consuming the load at the pop means the stick must be
+## RELEASED and re-applied before it steers pitch again - which is what the rider's foot does anyway.
 ##
-## Airborne only. Grounded pitch and the touchdown manual catch are unaffected, so holding through a
-## landing still enters a manual under the two-stage balance law exactly as before.
+## Airborne only, so holding through a landing still enters a manual under the two-stage balance law.
 var pop_load_spent: bool = false
 var last_pop: TrickSignature.Pop = TrickSignature.Pop.OLLIE
 ## Measurement of the trick in progress. Populated at pop with pop/flip/scoop; SkaterController
@@ -349,12 +337,9 @@ func _calculate_pop_impulse_scale(stick_mag: float) -> float:
 	return clampf(low_pop_max_ratio + (stick_mag - low_pop_knee) / upper * (1.0 - low_pop_max_ratio),
 		low_pop_max_ratio, 1.0)
 
-## THE TWO-STAGE BALANCE LAW. Both stages live here so the two callers cannot drift apart.
-##
-## Grounded pitch and touchdown classification both need to ask "is the rider balancing this end
-## down?", and they used to answer it with the same compound expression written out twice. The
-## expression is not obvious - it is the fix for BUG_ARCHIVE #5 - so two copies was one edit away
-## from them disagreeing about what a manual is.
+## THE TWO-STAGE BALANCE LAW. Both stages live here so the two callers - grounded pitch and touchdown
+## classification - cannot drift apart about what a manual is. The expressions are not obvious; they
+## are the fix for BUG_ARCHIVE #5, so a second copy is one edit away from them disagreeing.
 ##
 ## Stage 1 (ENTER, from four wheels) demands mid-zone precision and no active scoop. Both matter:
 ## sweeping the stick around the rim for a shove-it drops Cartesian y while the magnitude stays

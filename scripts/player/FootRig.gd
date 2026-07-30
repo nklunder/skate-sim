@@ -3,16 +3,15 @@ extends Node
 
 ## The rider's feet: shoe boxes and ankle pegs, and every animation that moves them.
 ##
-## PRESENTATION ONLY, and now provably so. Stance classification moved onto the REST offsets (see
-## RiderInput.update_stance_facts), so no live foot position is read by anything outside this
-## file any more. That is what frees the animations below to put a shoe anywhere at all - out over
-## the nose, off the back of the tail, past the rails - without a hand-maintained "the leading foot
-## must never cross Z = 0" invariant standing behind them. Move the feet however you like; nothing
-## downstream can notice.
+## PRESENTATION ONLY, and provably so: stance classification reads the REST offsets (see
+## RiderInput.update_stance_facts), so no live foot position is read by anything outside this file.
+## That frees the animations below to put a shoe anywhere at all - over the nose, off the back of the
+## tail, past the rails - with no hand-maintained "the leading foot must never cross Z = 0" invariant
+## behind them. Move the feet however you like; nothing downstream can notice.
 ##
-## Sits under BoardPivot so poses stay expressed in the deck's own frame: a foot at rest is at a
-## fixed local offset whatever the board is doing, and Switch/Fakie's 180 deg yaw is INHERITED
-## rather than compensated for. Every flick vector authored here mirrors correctly for free.
+## Sits under BoardPivot so poses stay in the deck's own frame: a foot at rest is at a fixed local
+## offset whatever the board is doing, and Switch/Fakie's 180 deg yaw is INHERITED rather than
+## compensated for. Every flick vector authored here mirrors correctly for free.
 ##
 ## HOW IT WORKS - two layers, deliberately separated:
 ##
@@ -25,10 +24,8 @@ extends Node
 ##      existing velocity carries through it, and nothing snaps.
 ##
 ## Driven by ONE explicit solve() call from SkaterController's frame pipeline, never by its own
-## _physics_process. Posing used to be spread across three points in that pipeline (an animate() at
-## the top, hover/lower inside the flight block, settle inside the grounded block), so answering
-## "which animation wins?" meant reading three call sites and knowing their order. The state machine
-## answers it in one place now.
+## _physics_process, so "which animation wins?" is answered by the state machine in one place rather
+## than reconstructed from several call sites and their order.
 
 ## What a foot is currently doing. Held PER FOOT - the two channels are independent.
 ##
@@ -101,14 +98,13 @@ const MAX_STEP: float = 1.0 / 30.0
 
 ## True once the feet have let go of a turning deck, until they have actually come home again.
 ##
-## A LATCH rather than a live read of deck_is_spinning, and the difference is not academic. Gating
-## on the live value cut the lift off the instant rotation finished, which is fine only while the
-## rotation and the leg happen to take the same time. Shorten the rotation - which is exactly what
-## flick-speed-driven flip rates will do - and the gate closes on a leg that is still tucked,
-## teleporting the feet: measured 0.149 m in a single frame at a fast rotation.
+## A LATCH, never a live read of deck_is_spinning. Gating on the live value cuts the lift off the
+## instant rotation finishes, which only works while the rotation and the leg take the same time -
+## shorten the rotation, as flick-speed-driven rates do, and the gate closes on a leg that is still
+## tucked and teleports the feet (measured 0.149 m in one frame at a fast rotation).
 ##
-## Latching instead means the deck's rotation decides when the feet LET GO, and the rider's legs
-## decide when they come back. Those are two different questions and they no longer have to agree.
+## Latching lets the deck's rotation decide when the feet LET GO and the rider's legs decide when
+## they come back. Two different questions that no longer have to agree.
 var _feet_released: bool = false
 var _left: Channel = null
 var _right: Channel = null
@@ -244,38 +240,21 @@ func solve(delta: float, frame: Frame, rider: RiderInput, camera_yaw: float,
 			ch.integrate(air_stiffness, air_damping_ratio, step)
 		else:
 			ch.integrate(foot_stiffness, foot_damping_ratio, step)
-		# THE COMPOSITION: what you see is the rider's leg plus whatever the animation is doing on
-		# top of it. The leg is applied RIGIDLY, after the spring, and that separation is the whole
-		# reason this is two lines rather than one target.
+		# THE COMPOSITION: what you see is the rider's leg plus whatever the animation is doing on top
+		# of it. The leg is applied RIGIDLY, after the spring - a foot is the end of a leg, it does not
+		# chase one. Springing the shoe toward its own leg length double-filters the motion and costs
+		# 16 mm of clearance in the first frames of a flip, where the deck is turning fastest.
 		#
-		# Springing the shoe toward its own leg length double-filtered the motion: the leg spring
-		# produced the tuck, and the shoe's spring then lagged behind it. The lag cost 16 mm of
-		# clearance in the first frames of a flip - while the deck was turning fastest - and the
-		# board passed through the shoe. A foot is the end of a leg; it does not chase it.
+		# THE LEG IS THE SINGLE SOURCE OF FOOT HEIGHT. The deck's clearance requirement reaches the
+		# feet as a tuck the legs HOLD (RiderBody.solve_legs), never as a parallel floor applied here -
+		# a floor tracks the deck's instantaneous silhouette, which oscillates twice per revolution.
 		#
 		# THE FEET ONLY LEAVE THE DECK WHEN THE DECK NEEDS THE ROOM. In a real ollie the feet never
-		# come off: the board is dragged up BY the front foot, so tucking the knees raises the
-		# rider's HIPS while the feet stay planted and the deck rises with them. Feet release only
-		# to let the deck turn over underneath. So the leg's tuck reaches the shoes only while the
-		# deck is actually rotating - on a plain ollie, or any trick with no flip and no scoop, the
-		# feet stay in contact for the whole jump, which is what a rider would tell you they do.
-		#
-		# This gate is why leg_stiffness is sized against the ROTATION and not against airtime: the
-		# tuck must be spent by the time the deck stops turning, or handing the feet back would be a
-		# step change in their height.
-		# The tuck, and then the floor the deck itself imposes. Taking the greater of the two is what
-		# makes this one motion rather than two: the leg is above the floor for most of a flip, so
-		# what you see is a single smooth tuck, and the floor only takes over at the end - where the
-		# leg has spent itself but the deck is still coming round. It carries the feet down to
-		# exactly zero as the deck arrives flat, which is why handing them back needs no blend.
-		#
-		# The floor cannot lift the feet off a flat deck: reach is zero at zero roll, so an ollie is
-		# untouched by it and the ollie rule survives whatever the leg is doing.
-		# The LEG is the single source of foot height. The deck's clearance requirement is fed into
-		# RiderBody as a tuck the legs HOLD - see solve_legs() - rather than applied here as a
-		# parallel floor. Applied here it tracked the deck's INSTANTANEOUS silhouette, which
-		# oscillates twice per revolution, so any rotation outlasting the tuck made the feet pump in
-		# time with the board.
+		# come off: the board is dragged up BY the front foot, so tucking the knees raises the rider's
+		# HIPS while the feet stay planted. So a plain ollie - anything with no flip and no scoop -
+		# keeps the feet in contact for the whole jump. This gate is also why leg_stiffness is sized
+		# against the ROTATION rather than airtime: the tuck must be spent by the time the deck stops
+		# turning, or handing the feet back is a step change in their height.
 		var lift: float = frame.foot_lift if _feet_released else 0.0
 		ch.node.position = ch.pose_position + Vector3(0.0, maxf(0.0, lift), 0.0)
 		ch.node.rotation = ch.pose_rotation
@@ -326,16 +305,13 @@ func _push_offset(t: float, is_left: bool, rider: RiderInput) -> Vector3:
 func _drive_ankle_pegs(delta: float, rider: RiderInput, camera_yaw: float,
 		board_yaw: float) -> void:
 	# Each PegPivot hangs under BoardPivot, which yaws to 180 deg in Switch/Fakie while CameraPivot
-	# (parented to SkaterRoot) stays put. Driving the tilt directly in pivot-local degrees therefore
-	# mirrored the pegs in switch, so stick-down read as up and left as right. Rotating the stick
-	# vector out of screen space and into the pivot's frame keeps the pegs pointing the way the
-	# physical stick is actually pushed at ANY yaw, so they stay honest part-way through an aerial
-	# spin too, not just at 0 deg and 180 deg.
+	# (parented to SkaterRoot) stays put. Driving the tilt in pivot-local degrees mirrors the pegs in
+	# switch, so stick-down reads as up. Rotating the stick vector out of screen space and into the
+	# pivot's frame keeps them pointing where the physical stick is pushed at ANY yaw - part-way
+	# through an aerial spin, not just at 0 and 180.
 	#
-	# Extended for direction reversals: when gravity reverses rolling direction and the chase camera
-	# swings 180 deg around SkaterRoot to track travel, CameraPivot's yaw changes by PI while
-	# BoardPivot's remains unaltered. Using the relative angle between camera view and board yaw
-	# keeps the pegs honest regardless of camera reversals.
+	# The RELATIVE angle, because the camera moves too: gravity reversing the rolling direction swings
+	# CameraPivot by PI around SkaterRoot while BoardPivot's yaw is unchanged.
 	var yaw: float = angle_difference(camera_yaw, board_yaw)
 	var yaw_cos: float = cos(yaw)
 	var yaw_sin: float = sin(yaw)

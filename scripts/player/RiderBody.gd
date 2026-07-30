@@ -1,35 +1,22 @@
 class_name RiderBody
 extends Node3D
 
-## The RIDER, as distinct from the board they are standing on.
+## The RIDER, as distinct from the board they are standing on. Two bodies, not one - simulating only
+## the deck leaves the feet with no physical source of motion, and leaves `BoardPivot.rotation.y`
+## carrying the rider's body spin and the board's 0/180 switch-stance relationship at once.
 ##
-## Until this node existed the physics simulated exactly one body - the deck - and the skater was a
-## drawing hung off it. That is the root of a whole class of problems rather than one bug:
-##
-##   1. The feet had no physical source of motion. Anything they did relative to the deck had to be
-##      authored, so every airborne foot curve was a hand-drawn imitation of physics, needing a
-##      special case per situation (pop strength did not scale it, an early landing snapped it mid
-##      arc, and a straight ollie got no motion at all).
-##   2. `BoardPivot.rotation.y` carried TWO unrelated quantities at once: the rider's body spin and
-##      the board's 0/180 switch-stance relationship. A boardslide puts the deck 90 deg across the
-##      direction of travel while the rider still faces near-forward - inexpressible while the body
-##      and the board are the same object.
-##
-## THE SPLIT: the feet stay in the deck's frame (which is what makes switch/fakie mirroring
-## inherited rather than compensated for - see FootRig's header), and only the TORSO separates. That
-## is also the anatomy: your feet are on the board, your shoulders are free, and the twist lives
-## between them.
+## THE SPLIT: the feet stay in the deck's frame (which is what makes switch/fakie mirroring inherited
+## rather than compensated for - see FootRig's header), and only the TORSO separates. That is also
+## the anatomy: your feet are on the board, your shoulders are free, the twist lives between them.
+## A boardslide puts the deck 90 deg across travel while the rider still faces near-forward, which is
+## inexpressible while the body and the board are the same object.
 ##
 ## Driven by an explicit call from SkaterController's frame pipeline, never by its own
-## _physics_process - the same rule ChaseCamera and FootRig follow, and for the same reason: the
-## ordering has to be visible in the pipeline rather than being a property of node order in
-## SkaterRig.tscn.
+## _physics_process - the same rule ChaseCamera and FootRig follow, so the ordering stays visible in
+## the pipeline rather than being a property of node order in SkaterRig.tscn.
 
-## Full-lean spin rate in the air, in degrees per second.
-##
-## Moved here from SkaterController unchanged. Spinning is something the RIDER does - the deck comes
-## round because it is attached to them, not the other way about - and that is exactly the
-## distinction this node exists to make.
+## Full-lean spin rate in the air, in degrees per second. Spinning is something the RIDER does; the
+## deck comes round because it is attached to them, which is the distinction this node exists to make.
 @export var body_spin_speed_deg: float = 443.0
 ## How quickly the shoulders converge on the rate the triggers are asking for. This is the rider's
 ## own rotational inertia: they cannot start or stop turning instantly.
@@ -51,11 +38,10 @@ extends Node3D
 @export var twist_internal_deg: float = 25.0
 ## How hard the board is pulled back into line with the shoulders, per second.
 ##
-## STARTS EFFECTIVELY RIGID, which is what makes introducing this a provable no-op: the board closes
-## the whole twist every frame, exactly as a board welded to the rider did. Lower it to let the deck
-## lag the shoulders. A plain relaxation rate rather than a spring, deliberately - a spring stiff
-## enough to be rigid at 60 Hz sits right on the edge of going unstable, and there is no feel to be
-## had from the rigid end of the range anyway.
+## EFFECTIVELY RIGID at the default - the board closes the whole twist every frame, exactly as a
+## board welded to the rider would. Lower it to let the deck lag the shoulders. A plain relaxation
+## rate rather than a spring, deliberately: a spring stiff enough to be rigid at 60 Hz sits on the
+## edge of going unstable, and there is no feel to be had from the rigid end of the range anyway.
 @export var twist_follow: float = 1000.0
 
 @export_category("Legs")
@@ -81,39 +67,35 @@ extends Node3D
 @export_range(0.0, 2.0) var leg_damping_ratio: float = 0.3
 ## Retraction speed given to the legs at the pop, in metres per second, at FULL pop impulse.
 ##
-## This is the one muscular command in the whole arrangement, and it is deliberately an IMPULSE
-## rather than a path. A knee tuck is not gravity - nothing emerges it - so something has to ask for
-## it; the honest place to draw the line is authoring the effort and letting integration produce the
-## motion. Everything downstream then follows for free: it scales with how hard the pop was, an
-## early landing simply meets the feet on the way, and a straight ollie tucks without a special case
-## because this hangs off the POP rather than off a flip that may not exist.
+## The one muscular command in the whole arrangement, and deliberately an IMPULSE rather than a path.
+## A knee tuck is not gravity - nothing emerges it - so authoring the effort and letting integration
+## produce the motion is where the honest line falls. Everything downstream follows for free: it
+## scales with pop strength, an early landing meets the feet on the way, and a straight ollie tucks
+## without a special case, because this hangs off the POP rather than a flip that may not exist.
 @export var tuck_impulse: float = 2.15
 
 ## Signed deg/s the shoulders are currently turning at.
 var spin_rate_deg: float = 0.0
 ## Live leg length. The rider and the board are BOTH projectiles and gravity cancels exactly in the
-## difference between two projectiles, so their separation is not governed by gravity at all - it is
-## governed entirely by the legs. That is why there is no second ballistic integrator here to
-## subtract from the board's: it would be redundant, and two integrations of the same g would drift
-## apart in the last decimal for no gain.
+## difference between two projectiles, so their separation is governed entirely by the legs. That is
+## why there is no second ballistic integrator here to subtract from the board's - it would be
+## redundant, and two integrations of the same g drift apart in the last decimal for no gain.
 var _leg: float = 0.0
 var _leg_vel: float = 0.0
 ## The board's yaw offset from the rider, in degrees - the wind-up between feet and shoulders.
 ##
-## Held as its own state rather than derived from the two frames' yaws, and that is load-bearing.
-## The deck kicking out under a directional pop (lateral_pop_yaw_deg) IS a twist, and a coupling
-## that re-derived the twist from the yaws every frame would relax it the instant it was applied.
-## Anything that turns the board relative to the rider therefore winds THIS, and the board's yaw is
-## the consequence.
+## HELD AS ITS OWN STATE, never re-derived from the two frames' yaws. The deck kicking out under a
+## directional pop (lateral_pop_yaw_deg) IS a twist, and a coupling that re-derived it every frame
+## would relax it the instant it was applied. Anything that turns the board relative to the rider
+## winds THIS; the board's yaw is the consequence.
 var twist_deg: float = 0.0
 
 ## Advances the shoulders one frame under trigger lean, and reports HOW FAR THEY TURNED, in degrees.
 ##
-## Returns the delta rather than the resulting absolute yaw, deliberately. While the coupling is
-## rigid the board is carried round by this same delta; once the torsion spring softens it will be
-## carried by some fraction of it. A caller handed the absolute yaw would have to know how the two
-## frames relate in order to use it at all - which is precisely the knowledge this split exists to
-## keep in one place.
+## Returns the DELTA, not the resulting absolute yaw. While the coupling is rigid the board is
+## carried round by this same delta; once the torsion softens it will be carried by some fraction of
+## it. A caller handed the absolute yaw would have to know how the two frames relate to use it at
+## all - which is the knowledge this split exists to keep in one place.
 ##
 ## Below the rate threshold nothing is written, so a rider who is not asking to spin accumulates no
 ## drift from the lerp's asymptotic tail.
@@ -128,10 +110,10 @@ func advance_spin(lean: float, delta: float) -> float:
 
 ## How far the feet are lifted off the deck, in metres. Zero while stood normally.
 ##
-## The whole of the airborne foot motion is this one number. It replaced a parabola authored against
-## flip progress, which could not answer three ordinary questions: a weak pop tucked exactly as hard
-## as a full one, an early landing was snapped flat mid-arc, and a straight ollie - having no flip to
-## be a progress OF - lifted the feet by literally nothing for the entire jump.
+## The whole of the airborne foot motion is this one number, driven by the legs rather than authored
+## against flip progress. A curve keyed to flip progress cannot scale with pop strength, cannot be
+## interrupted by an early landing, and gives a straight ollie - which has no flip to be a progress
+## OF - no foot motion at all.
 func foot_lift() -> float:
 	return maxf(0.0, stand_height - _leg)
 
@@ -147,16 +129,12 @@ func tuck(scale: float) -> void:
 ## than needing the animation cut short.
 ##
 ## `hold_lift` is the least the rider stays tucked by, in metres, while the deck still needs the
-## room. THE RIDER TUCKS ONCE AND HOLDS IT. They do not pump their knees in time with the board, so
-## this is a floor the legs rest on rather than a target they chase - and when it releases, the legs
-## extend back under their own spring, which is what brings the feet home smoothly instead of in a
-## step.
+## room. THE RIDER TUCKS ONCE AND HOLDS IT - a floor the legs rest on, never a target they chase, so
+## when it releases they extend back under their own spring and bring the feet home smoothly.
 ##
-## The clearance used to be applied to the SHOES, as the deck's instantaneous silhouette. That is
-## fine while the tuck sits above it and it only fills the tail of a single flip, but a HELD rotation
-## outlasts the tuck - and from then on the silhouette was the only thing lifting the feet, so they
-## pumped between 0.001 m and 0.089 m twice per revolution. It read as the feet and the board
-## fighting each other in mid-air, and as the spin accelerating, which it never did.
+## Applied to the LEGS rather than to the shoes for that reason: as an instantaneous silhouette on
+## the shoes it makes the feet pump twice per revolution once a held rotation outlasts the tuck. See
+## SkaterController._deck_clearance_demand(), which is where the peak-hold lives.
 func solve_legs(delta: float, grounded: bool, hold_lift: float = 0.0) -> void:
 	var damping: float = 2.0 * leg_damping_ratio * sqrt(maxf(leg_stiffness, 0.0))
 	_leg_vel += ((stand_height - _leg) * leg_stiffness - _leg_vel * damping) * delta

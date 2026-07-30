@@ -3,9 +3,7 @@ extends Node3D
 
 @export_category("Surface Collision")
 # Rig origin to wheel contact, measured from the model: the lowest wheel vertex sits 0.078 below
-# the rig origin. The old hardcoded 0.25 was never this distance - it was just the height the rig
-# happened to be placed at, while the Ground body's top surface is at y=0, so the board floated
-# 17 cm and its shadow read as detached.
+# the rig origin. Not a placement height - get it wrong and the board floats with a detached shadow.
 @export var ride_height: float = 0.078
 @export var probe_reach: float = 1.2 # How far below the trucks to look for a surface.
 @export var ground_snap_distance: float = 0.06 # Surface gap within which the skater counts as grounded.
@@ -44,23 +42,16 @@ var surface_hit: SurfaceProbe.Hit = SurfaceProbe.Hit.new()
 @export var kickturn_pitch_deg: float = 10.0
 ## Kickturn rotation rate at full lean, in rad/s. A RATE rather than a radius, unlike carving.
 ##
-## Carving is a rolling steer, so it obeys omega = v / R and dies away as speed does - which is
-## correct, and is exactly why the kickturn cannot share that term. A kickturn is not the wheels
-## steering the board: the rider is up on the back truck pivoting it round by muscle, and that works
-## just as well stopped. Under v / R a kickturn at 0.3 m/s would rotate at ~6 deg/s, i.e. not at all.
-##
-## 3.0 rad/s is the rate the old shared `turn_speed` produced, kept exactly so the kickturn branch -
-## and the trailing-axle anchoring that only it exercises - is unchanged by the carve work.
+## A kickturn is not the wheels steering the board: the rider is up on the back truck pivoting it
+## round by muscle, which works just as well stopped. So it cannot share carving's omega = v / R,
+## which would give a kickturn at 0.3 m/s about 6 deg/s, i.e. nothing.
 @export var kickturn_rate: float = 3.0
 ## How fast the grounded turn rate chases the rate the rider's lean is asking for, per second.
 ##
-## Matches RiderBody.spin_response deliberately: airborne body spin has always eased in at 20.0, and
-## the ground snapping instantly was the asymmetry. Higher is twitchier and approaches the old
-## instant behaviour; lower makes the board feel heavier to set on edge and slower to release.
-##
-## This is also the RESPONSE half of truck tightness - tight bushings are sluggish and stable, loose
-## ones twitchy - so when hardware customisation lands (06) one tightness number should drive this
-## and carve_radius_m together rather than them becoming independent sliders.
+## Matches RiderBody.spin_response deliberately - airborne body spin eases in at 20.0, and the
+## ground snapping instantly was the asymmetry. Higher is twitchier; lower makes the board feel
+## heavier to set on edge. Also the RESPONSE half of truck tightness, so hardware customisation (06)
+## should drive this and carve_radius_m from one tightness number rather than two sliders.
 @export var steer_response: float = 20.0
 var manual_timer: float = 0.0
 var is_grounded: bool = true
@@ -74,9 +65,9 @@ var _steer_rate: float = 0.0
 ## tilt stays inside the friction cone atan(mu); past that the foot slides down the rail rather than
 ## flattening it, and the board shoots out. mu = 1.0 is a 45 deg cone.
 ##
-## This is what decides whether a flip is landable - NOT whether a fixed-duration flip animation
-## happened to finish. Judging on duration made trick success depend on hang time, so raising a ledge
-## by 5 cm could make a kickflip mathematically impossible to land (see AGENTS.md known bugs).
+## This decides whether a flip is landable - NOT whether a flip animation finished. Judging on
+## duration tied trick success to hang time, so a 5 cm taller ledge made a kickflip mathematically
+## unlandable. BUG_ARCHIVE #1.
 @export var grip_friction: float = 1.0
 ## Measured from the loaded deck in _ready(), never authored. Half-width and underside height give
 ## the roll angle at which a RAIL reaches the ground before the wheels do; rolling past it would
@@ -91,24 +82,18 @@ var catch_cone_deg: float = 45.0
 var last_catch_error_deg: float = 0.0
 
 @export_category("Landing Absorption")
-## Visual suspension travel. Until this existed the skater hit the ground at several m/s and stopped
-## in one frame with no give anywhere in the system.
-##
-## NOT the fix for harsh-feeling landings, and worth remembering why: a straight ollie has exactly
-## the same dead stop as a badly-rotated one, and straight ollies read as fine. Impact was never the
-## complaint - the travel-direction jerk was (see landing_turn_rate_deg). This is separate polish,
-## and setting landing_dip_max to 0.0 disables it cleanly.
-##
-## Applied to SurfaceAlign.position, which nothing else writes, so the deck and rider compress toward
-## the ground while the rig ORIGIN stays put. That matters: every ground probe and the ride-height
-## snap work off global_position, so a dip here cannot disturb them. The camera hangs off SkaterRoot
-## and so does not dip, which is what makes the compression readable rather than just a screen shake.
+# Visual suspension travel, and cosmetic polish only - NOT the fix for harsh landings. That is
+# landing_turn_rate_deg; see the argument there. Setting landing_dip_max to 0.0 disables it cleanly.
+#
+# Applied to SurfaceAlign.position, which nothing else writes, so the deck and rider compress toward
+# the ground while the rig ORIGIN stays put. That matters: every ground probe and the ride-height
+# snap work off global_position, so a dip here cannot disturb them. The camera hangs off SkaterRoot
+# and so does not dip, which is what makes the compression readable rather than a screen shake.
 @export var landing_dip_max: float = 0.04 # Metres of compression at or above the reference impact.
 ## Impact speed producing full compression. Kept ABOVE jump_impulse on purpose: a flat-ground pop
 ## lands at exactly its takeoff speed, so a reference equal to it would saturate every flat landing
-## at maximum dip and leave the grading with nothing to say except on drops. Left at 7.0 when the pop
-## came back down to 5.4: a flat landing now sits at 0.77 of full compression, and a drop off the
-## 0.8 m platform arrives at ~7.4 m/s and still reaches it, so the whole range stays in use.
+## and leave the grading nothing to say except on drops. At the current 5.4 pop a flat landing sits
+## at 0.77 of full compression, and a drop off the 0.8 m platform still reaches 1.0.
 @export var landing_dip_ref_speed: float = 7.0
 @export var landing_dip_recover: float = 9.0 # Rate the suspension extends back out.
 var _landing_dip: float = 0.0
@@ -117,13 +102,10 @@ var _landing_dip: float = 0.0
 ## The chase camera. Everything about HOW it frames the skater lives on ChaseCamera.gd; the rig only
 ## decides WHEN it advances, by calling follow() at the end of the frame pipeline.
 @onready var camera_pivot: ChaseCamera = $CameraPivot
-## Below this ground speed the direction of travel is treated as unreadable and the last known
-## heading is held instead.
-##
-## The heading of a near-zero velocity is noise, and that is precisely the state at the top of a
-## bank in the instant before a reversal. Lives here rather than on the camera because travel is a
-## physics quantity: both the camera's heading and the rolling-direction sign below ask this same
-## question, and they must not be able to disagree about the answer.
+## Below this ground speed the direction of travel is unreadable and the last known heading is held
+## instead - the heading of a near-zero velocity is noise, which is the state at the top of a bank
+## just before a reversal. Lives here, not on the camera: both the camera's heading and the
+## rolling-direction sign below ask this question, and they must not be able to disagree.
 @export var travel_min_speed: float = 0.6
 ## Persistent travel direction sign along the board's rolling axis (+1.0 for forward, -1.0 for backward).
 ## Updated above travel_min_speed so when stalling to a stop, pushing and stance checks preserve
@@ -131,25 +113,16 @@ var _landing_dip: float = 0.0
 var _travel_axis_sign: float = 1.0
 
 @export_category("Aerial & Jump Physics")
-## Takeoff vertical speed, in m/s. Peak height is v^2/(2g) and airtime is 2v/g, so raising THIS
-## rather than lowering gravity_accel buys height quadratically and airtime linearly - a poppier
-## board rather than a floatier one. Lowering gravity instead would scale both equally and would
-## also move which gradients hold the skater, since that threshold is asin(rolling_friction/gravity).
+## Takeoff vertical speed, in m/s. Raise THIS rather than lowering gravity_accel for a poppier
+## board: height goes as v^2 and airtime as v, where lowering gravity scales both equally and also
+## moves which gradients hold the skater, at asin(rolling_friction / gravity_accel).
 ##
-## At 5.4 with gravity_accel = 16: peak 0.867 m measured, airtime 40 frames at 60 Hz.
+## Measured at 5.4 with gravity_accel 16: peak 0.867 m, airtime 40 frames at 60 Hz. Height goes as
+## the SQUARE of this, so pop_impulse_scale bites hard - only a pop above ~96% clears the 0.8 m
+## platform, where at 6.0 anything above ~85% did.
 ##
-## 5.4 IS A MEASURED FLOOR, not a taste. It is the lowest pop at which a soft flick still brings the
-## deck fully round - catch error 0.0 deg. Below it the shortfall starts eating catch_cone_deg
-## instead: 6.4 deg at 5.2, 11.9 at 5.0, 36.9 at 4.6 against a 45 deg cone. So lowering the pop
-## further is not free; it has to be paid for by raising flip_speed_deg or flick_rate_min, and a
-## faster deck is the opposite of what 07b was for.
-##
-## Height goes as the SQUARE of this, so pop_impulse_scale bites hard: at 5.4 only a pop above ~96%
-## clears the 0.8 m platform, where at 6.0 anything above ~85% did.
-##
-## AIRTIME IS THE ROTATION BUDGET. A soft flick turns at flick_rate_min * flip_speed_deg and has to
-## bring the deck round inside one hop, so every frame here is a frame the flip and catch ramps can
-## spend - see flick_rate_min, which is the field that has to rise if this ever falls.
+## AIRTIME IS THE ROTATION BUDGET, so this is coupled to flick_rate_min and flip_speed_deg - see the
+## measured table on flick_rate_min before lowering it. 5.4 is a measured floor, not a taste.
 @export var jump_impulse: float = 5.4
 ## Maximum sideways jump velocity (in m/s) imparted when aiming the pop thumbstick off-center.
 @export var max_lateral_pop_impulse: float = 1.5
@@ -157,8 +130,6 @@ var _travel_axis_sign: float = 1.0
 @export var lateral_pop_yaw_deg: float = 5.0
 ## Also sets which gradients hold the skater, via rolling_friction - see that field.
 @export var gravity_accel: float = 16.0
-# vertical_velocity now lives with `velocity` under Motion & Push Physics: it is velocity.y, not a
-# variable of its own. Two velocity representations was the split this rewrite removed.
 
 @export_category("Flip & Spin Physics (3-Layer Hierarchy)")
 @export var flip_speed_deg: float = 816.0
@@ -167,83 +138,60 @@ var _travel_axis_sign: float = 1.0
 @export var rotational_complexity_coupling: float = 0.15
 
 @export_group("Flick Intensity")
-## Flick speed, in stick-deflection units per second, that produces the REFERENCE rotation rate -
-## i.e. the rate the deck turned at before flick speed was consumed at all.
+## Flick speed, in stick-deflection units per second, that produces the REFERENCE rotation rate.
 ##
 ## Measured throws at 60 Hz, from a 0.7 deflection: 1 frame = 42, 2 = 21, 3 = 14, 5 = 8.4, 12 = 3.5.
-## 14 is a brisk three-frame throw, so an ordinary flick lands on 1.0x and the tuning below only
-## has to describe the deviation.
+## 14 is a brisk three-frame throw, so an ordinary flick lands on 1.0x.
 @export var flick_reference_speed: float = 14.0
 ## How much rotation rate follows flick speed. 0 ignores it entirely and restores a fixed rate.
 @export_range(0.0, 2.0) var flick_rate_sensitivity: float = 0.5
 ## Bounds on the multiplier. The FLOOR is the important one: a soft flick should turn the deck
 ## lazily and risk an incomplete trick, not guarantee a primo - the rider should be able to see it
-## failing and still catch it.
-##
-## IT IS TIED TO flip_speed_deg AND TO jump_impulse, and cannot be tuned independently of either.
-##
-## MEASURED, at jump_impulse 5.4 (40 frames of airtime). A soft flick turns at 0.72 * 816 = 587 deg/s
-## and needs ~38.7 frames to bring the deck round - 36.8 of rotation plus ~1.9 the ramps cost - so
-## there is about 1.3 frames of slack and a soft flick still completes with 0.0 deg of catch error.
-##
-## Below that pop the shortfall is NOT a primo; it is spent out of catch_cone_deg instead, and the
-## deck lands short but inside the cone: 6.4 deg at jump_impulse 5.2, 11.9 at 5.0, 36.9 at 4.6
-## against a 45 deg cone. So the pop can go lower than 5.4 - it just stops being free, and starts
-## trading clean completion for catch margin. Raise this, or flip_speed_deg, to buy that back.
+## failing and still catch it. TIED TO flip_speed_deg AND jump_impulse; see the block below.
 @export var flick_rate_min: float = 0.72
 @export var flick_rate_max: float = 1.6
+# THE POP / FLICK / RATE BUDGET, measured at jump_impulse 5.4 (40 frames of airtime). A soft flick
+# turns at 0.72 * 816 = 587 deg/s and needs ~38.7 frames to bring the deck round (36.8 of rotation
+# plus ~1.9 the ramps cost), so there is ~1.3 frames of slack and it still completes with 0.0 deg of
+# catch error.
+#
+# Below that pop the shortfall is NOT a primo - it is spent out of catch_cone_deg, and the deck lands
+# short but inside it: 6.4 deg at jump_impulse 5.2, 11.9 at 5.0, 36.9 at 4.6 against a 45 deg cone.
+# So the pop can go below 5.4; it just stops being free and starts trading clean completion for catch
+# margin. Raise flick_rate_min or flip_speed_deg to buy that back.
 
 @export_group("Angular Acceleration")
-## Seconds the deck takes to reach full rotation rate after the pop.
-##
-## A foot applies torque over its CONTACT TIME, not instantaneously - roughly 30-50 ms, so 2-3 frames
-## at 60 Hz. Without this the deck went from 0 to 13.6 deg/frame in a single frame, which is not a
-## tuning value being wrong but a missing term: nothing physical starts rotating that way, and it is
-## the largest single reason tricks read as machine-driven rather than thrown.
+## Seconds the deck takes to reach full rotation rate after the pop. A foot applies torque over its
+## CONTACT TIME, not instantaneously - roughly 30-50 ms, so 2-3 frames at 60 Hz. Nothing physical
+## starts rotating in one frame, and that is the largest single reason tricks read as machine-driven.
 @export var flip_spin_up_time: float = 0.05
-## Seconds of deceleration as the deck arrives at its target, i.e. the feet absorbing the catch.
-##
-## The same physical event the landing already models with catch_cone_deg - the rider stamping the
-## deck flat - applied in mid-air. Without it the deck dropped from full rate to zero in one frame.
+## Seconds of deceleration as the deck arrives at its target, i.e. the feet absorbing the catch. The
+## same physical event catch_cone_deg models at the landing, applied in mid-air.
 @export var flip_catch_time: float = 0.06
 ## Fraction of full rate the deck is still turning at when it reaches the target. MUST be > 0, or
 ## move_toward approaches asymptotically and the trick never completes.
 @export_range(0.05, 1.0) var flip_catch_floor: float = 0.35
-## Peak wobble on the deck's third axis, in degrees, at reference flick intensity.
+## Peak wobble on the deck's third axis, in degrees, at reference flick intensity. A deck flicked at
+## its EDGE gets angular momentum off its principal axis, so it precesses rather than spinning true.
 ##
-## A deck flicked at its EDGE receives angular momentum that is not aligned with a principal axis, so
-## it precesses - it tumbles slightly rather than spinning true like a wheel on an axle. Mild real
-## physics rather than a cheat, and even 2-3 deg reads very differently.
-##
-## PURELY VISUAL, and deliberately so: this writes BoardMesh's x rotation, which nothing else reads.
-## The catch cone judges roll and yaw only, and _deck_clearance_demand() reads roll only, so the
-## wobble cannot disturb a landing or the feet. That also makes it authored decoration rather than
-## physics - honest naming for what it currently is. Feeding it into the clearance would make it real
-## and would move the worst-case figure, which is a separate decision.
+## PURELY VISUAL, structurally: it writes BoardMesh's x rotation, which nothing else reads. The catch
+## cone judges roll and yaw only and _deck_clearance_demand() reads roll only, so it cannot disturb a
+## landing or the feet. Feeding it into the clearance would make it real and move the worst case.
 @export var wobble_max_deg: float = 2.5
 ## Wobble cycles per full deck revolution. Precession rate is proportional to spin rate for a rigid
-## body, so tying it to the turn rather than to wall-clock time is what keeps it looking coupled to
-## the trick instead of like an independent vibration.
+## body, so tying it to the turn rather than to wall-clock time keeps it coupled to the trick
+## instead of reading as an independent vibration.
 @export var wobble_cycles_per_turn: float = 1.5
 ## Exponential decay time for the wobble, in seconds. Angular momentum is not lost in flight, but the
-## deck settles onto its principal axis, and a wobble that is still going at the catch fights it.
+## deck settles onto its principal axis, and a wobble still going at the catch fights it.
 @export var wobble_decay_time: float = 0.35
 @export_group("")
 ## How far a released deck may UNWIND to reach a resting orientation instead of carrying on to the
-## next one, in degrees.
+## next one, in degrees. Defaults to the measured `catch_cone_deg` (45 deg) - already this project's
+## answer to "how far off can the rider still grab this board". See _settle_target() for the trade.
 ##
-## A board with angular momentum does not spin backwards in mid-air. The rider can catch it and stop
-## it - a small correction with their feet - but unwinding much more than that reads as the
-## simulation running in reverse. Defaults to the measured `catch_cone_deg` (45 deg), which is
-## already this project's answer to "how far off can the rider still grab this board".
-##
-## THE TRADE, and it is only on the 1-versus-2 boundary: raising this lets the rider hold further
-## past a completion and still come back to a single, at the cost of a longer visible reversal. Every
-## other boundary is unaffected, because the window for "exactly N turns" is one full revolution wide
-## wherever this sits - it moves the boundary's PHASE, never its width.
-##
-## Note about 2 frames of rotation are spent before the settle engages, since `flick_held` is
-## computed by TrickState, which ticks after the controller reads it. That lag comes off this budget.
+## Note ~2 frames of rotation are spent before the settle engages, since `flick_held` is computed by
+## TrickState, which ticks after the controller reads it. That lag comes off this budget.
 @export var flip_unwind_max_deg: float = 45.0
 ## Where each axis is heading. DERIVED from the turn counts below, never fixed at the pop - see
 ## _refresh_rotation_targets().
@@ -253,14 +201,12 @@ var target_board_yaw: float = 0.0
 ## started from. Roll rests every 360 deg (griptape up again); yaw rests every 180 (a deck half a
 ## turn round is the same deck).
 ##
-## THE TURN COUNT IS THE IRREDUCIBLE STATE, and it is the reason held rotation is a one-line
-## extension rather than a rewrite. Geometry alone cannot say when a trick is over: a 360 scoop
-## passes THROUGH a resting orientation at 180, and stopping there would be wrong. How many turns
-## were asked for is rider intent, not something the deck's angle can be asked about. Expressing the
-## target as `rest + period * turns * direction` keeps that intent in one growable number, while the
-## RATE stays constant and independent of it - so asking for another turn costs nothing and
-## re-derives nothing. Fixing an absolute target at the pop is what made "keep spinning while held"
-## impossible without moving a goalpost that four other systems were keyed to.
+## THE TURN COUNT IS THE IRREDUCIBLE STATE. Geometry alone cannot say when a trick is over - a 360
+## scoop passes THROUGH a resting orientation at 180, and stopping there would be wrong. How many
+## turns were asked for is rider intent, not something the deck's angle can be asked about.
+## Expressing the target as `rest + period * turns * direction` keeps that intent in one growable
+## number while the RATE stays constant and independent of it, so asking for another turn costs
+## nothing and re-derives nothing.
 var flip_roll_turns: int = 0
 var flip_yaw_turns: int = 0
 var _roll_rest_at_pop: float = 0.0
@@ -284,11 +230,8 @@ var _wobble_amp: float = 0.0
 var _wobble_phase: float = 0.0
 var _wobble_elapsed: float = 0.0
 ## Signed deg/s imparted to the deck at the pop, then held constant - airborne there is no torque on
-## the board, so constant angular velocity is the physically correct integration.
-##
-## Both axes are scaled to share ONE trick duration. Driving them at independent fixed rates meant a
-## 360 flip's yaw finished at 0.42 s while its roll was only 253 deg round, so the board visibly
-## stopped spinning and kept flipping, then halted - see AGENTS.md.
+## the board, so constant angular velocity is the physically correct integration. Both axes are
+## scaled to share ONE trick duration; see _impart_deck_rotation().
 var flip_roll_rate: float = 0.0
 var flip_yaw_rate: float = 0.0
 var is_flip_in_progress: bool = false
@@ -322,9 +265,9 @@ var pop_riding_reversed: bool = false
 @onready var rider_body: RiderBody = $SurfaceAlign/RiderTorso
 @onready var board_pivot: Node3D = $SurfaceAlign/BoardPivot
 @onready var board_mesh: Node3D = $SurfaceAlign/BoardPivot/BoardMesh
-## The rider's feet and every animation that moves them. Presentation only - see FootRig.gd, and
-## note that this is now structural rather than a convention: the stance test below consumes the
-## shoes' REST offsets, so no live foot position feeds any decision at all.
+## The rider's feet and every animation that moves them. Presentation only, structurally rather than
+## by convention: the stance test consumes the shoes' REST offsets, so no live foot position feeds
+## any decision at all. See FootRig.gd.
 @onready var foot_rig: FootRig = $SurfaceAlign/BoardPivot/FootRig
 ## Reused each frame rather than allocated, since it is pure parameter passing. Everything FootRig
 ## is allowed to know about the frame it is posing for goes through here - it holds no reference
@@ -349,99 +292,66 @@ var _foot_frame := FootRig.Frame.new()
 @export var manual_pitch_min_deg: float = 2.0
 ## Steering authority retained at the START of a push stroke, easing back to full as it finishes.
 ##
-## On a real board you cannot carve while pushing, and the reason is anatomical rather than
-## frictional: carving is done by leaning the deck on its bushings, which needs the rider's weight
-## over both trucks. During a push one foot is on the ground and the weight is centred over the
-## front truck, so there is nothing left to lean WITH.
-##
-## Ramped rather than switched. Steering authority returns as the foot comes back to the deck, which
-## is both what actually happens and smoother than a step change - a hard restore at the end of the
-## stroke reads as the board suddenly grabbing.
+## You cannot carve while pushing, for anatomical rather than frictional reasons: carving leans the
+## deck on its bushings, which needs weight over both trucks, and during a push one foot is on the
+## ground with the weight over the front truck. Ramped rather than switched - a hard restore at the
+## end of the stroke reads as the board suddenly grabbing.
 @export_range(0.0, 1.0) var push_turn_damping: float = 0.15
 ## Seconds since the last push impulse. Also the natural home for a physical push cooldown, if
 ## kicking should ever be rate-limited: gate _apply_push_impulse() on this rather than on whether
 ## FootRig happens to be mid-stroke.
 var _since_push: float = 1000.0
-## Deceleration opposing travel. Roughly 5-10x real rolling resistance: a real board coasts for over
-## a minute, which is not fun. Since slopes went live this number does a SECOND job - it sets which
-## gradients you can rest on. Friction holds you wherever the fall line is weaker than it, i.e. up to
-## asin(rolling_friction / gravity_accel) ~= 3.6 deg at present. Nothing in TestWorld is that gentle,
-## so every ramp here rolls you. Raise this if you want parkable banks.
+## Deceleration opposing travel. Roughly 5-10x real rolling resistance, since a real board coasts for
+## over a minute. Does a SECOND job: it sets which gradients you can rest on, holding you wherever
+## the fall line is weaker than it - up to asin(rolling_friction / gravity_accel) ~= 3.6 deg. Nothing
+## in TestWorld is that gentle, so every ramp rolls you. Raise it if you want parkable banks.
 @export var rolling_friction: float = 1.0
 ## Lateral grip: the deceleration the wheels apply ACROSS their rolling axis. Wheels roll freely
 ## along their axis and resist sideways, and that single asymmetry is what produces imperfect-landing
 ## drift, the speed cost of carving, and sideways-landing scrub. High values snap a crooked landing
 ## straight almost at once; low values let the board slide and drift.
 @export var wheel_side_grip: float = 40.0
-## Sideways speed at touchdown above which the wheels wash out and the rider is thrown.
-##
-## Replaced a fixed 45-135 deg angle window that had NO speed term, so landing at 100 deg while
-## creeping at 0.2 m/s bailed exactly as hard as at 7 m/s. Because the test is on momentum, tolerance
-## now scales with speed on its own: at 7 m/s you get +/-21 deg, at 3 m/s +/-56 deg, and at or below
-## this value any angle is survivable - including a full 90 deg.
+## Sideways speed at touchdown above which the wheels wash out and the rider is thrown. Because the
+## test is on MOMENTUM, tolerance scales with speed on its own: +/-21 deg at 7 m/s, +/-56 deg at
+## 3 m/s, and at or below this value any angle is survivable, including a full 90 deg.
 @export var max_landing_slide: float = 2.5
 ## Fraction over the deck's WIDEST reach that the rider holds their feet clear by while it turns.
 @export var deck_clearance_margin: float = 1.08
 ## Fastest the DIRECTION OF TRAVEL may swing while realigning after a landing, in degrees per second.
-##
-## Full grip on the first grounded frame turned travel by the whole residual in a single tick while
-## the camera eased over eight - a smooth view over a world that jerked, which reads as a harsh
-## landing without looking like a snap. Note this is the fix for that; landing_dip_max is NOT. A
-## straight ollie has the same dead-stop impact as a badly-rotated one and reads as fine, so impact
-## was never the complaint.
+## THIS is the fix for landings feeling harsh, not landing_dip_max - a straight ollie has the same
+## dead-stop impact as a badly-rotated one and reads as fine, so impact was never the complaint.
 ##
 ## Caps the ANGULAR rate rather than the lateral force, because the angle is what the eye tracks. A
 ## force cap gets the shape backwards: scrubbing removes a fixed slice of lateral speed per frame, so
-## as the remainder shrinks the same slice becomes an ever LARGER angle, and the worst jerk lands on
-## the final frame of the settle. Capping the angle gives a constant, even swing.
-##
-## Independent of the camera. The two once had to match, back when the camera's aim was smoothed
-## while its position was not: the subject left the frame, so any disagreement between how fast the
-## world turned and how fast the view turned was glaring. Now that the camera orbits and keeps the
-## skater centred throughout, this is purely a question of how quickly the wheels drag travel into
-## line, and can be tuned on its own merits.
+## as the remainder shrinks the same slice becomes an ever LARGER angle and the worst jerk lands on
+## the final frame. Capping the angle gives a constant, even swing.
 ##
 ## Applies only while realigning from a touchdown. Carving is a STEADY STATE and needs full grip: at
 ## full lean the board yaws ~172 deg/s, so a permanent cap here would make every hard turn drift.
-## Same transient-versus-steady-state split the camera needed two rates for.
 @export var landing_turn_rate_deg: float = 60.0
-## Largest heading error the paced realignment above will cover, in degrees. Beyond it, the excess
-## is scrubbed by wheel_side_grip at full strength instead.
+## Largest heading error the paced realignment above will cover, in degrees. Beyond it the excess is
+## scrubbed by wheel_side_grip at full strength instead.
 ##
-## This is the DOMAIN of that pacing, not a tuning knob for its feel. The budget works by the
-## small-angle relation v_lat ~= speed * angle, which needs an along-axis component to rotate travel
-## toward. Land with no forward speed at all - a standing directional pop, which leaps purely
-## sideways - and the angle is 90 deg, the approximation is meaningless, and draining at
-## speed * angular_rate rotates nothing. It just decays the speed linearly over ~1 s while grip,
-## which would have stopped it in 28 ms, never engages at all because lateral never exceeds the
-## budget. The board slid sideways across the ground like ice.
+## The DOMAIN of that pacing, not a knob for its feel. The budget works by the small-angle relation
+## v_lat ~= speed * angle, which needs an along-axis component to rotate travel toward; with no
+## forward speed at all the angle is 90 deg, the approximation is meaningless, and draining at
+## speed * angular_rate rotates nothing while grip never engages. That is a board sliding on ice.
 ##
-## Expressed as an ANGLE rather than a speed so it scales with how fast the rider arrived: the
-## question "is this a heading to be swung into line, or a skid the wheels should fight?" is about
-## the direction of travel, not its magnitude. 45 deg is the diagonal - past it, more of the motion
-## is across the wheels than along them, which is a skid by any reading.
+## An ANGLE rather than a speed so it scales with how fast the rider arrived. 45 deg is the diagonal
+## - past it more of the motion is across the wheels than along them, which is a skid by any reading.
 @export var max_realign_angle_deg: float = 45.0
 ## Sideways speed still owed from the last landing, in m/s. A BUDGET that only ever shrinks - never
-## a state flag inferred from live lateral speed.
+## a state flag inferred from live lateral speed, and never topped back up.
 ##
-## That distinction is the whole fix for the landing skid. The old version was a boolean latch that
-## capped grip and cleared itself once live lateral fell under 0.02 m/s. But steering GENERATES
-## lateral speed, and at full lean it generates it faster than the capped grip removes it - so
-## holding a trigger through a touchdown meant the clear condition never arrived, the cap never
-## lifted, and the board slid sideways for as long as the trigger was held. Weak grip kept lateral
-## high, and high lateral kept grip weak: a positive feedback loop the rider drove directly.
-##
-## The flaw underneath was that one number could not tell two things apart - sideways speed LEFT
-## OVER from the landing, which should be worked off smoothly at a paced rate, and sideways speed
-## the rider is CREATING right now by carving, which the wheels should fight at full strength.
-## Recording the residual explicitly at touchdown separates them: it decays on its own schedule and
-## nothing the rider does can top it back up.
+## One number cannot tell apart sideways speed LEFT OVER from the landing, which should be worked off
+## at a paced rate, from sideways speed the rider is CREATING by carving, which the wheels should
+## fight at full strength. A latch on live lateral conflated them into a feedback loop the rider
+## could drive directly. BUG_ARCHIVE #7.
 var _landing_residual: float = 0.0
-## THE authoritative motion state, in world space. Deliberately not rebuilt from orientation each
-## frame: `velocity = -basis.z * current_speed` made travel and facing the same quantity, so the
-## skater could only ever move exactly where the board pointed. That is what forced landings to snap
-## to a perfect 0/180, made slope gravity impossible to express, and left the sideways-landing test
-## with nothing but an angle to go on.
+## THE authoritative motion state, in world space. NEVER rebuild it from orientation:
+## `velocity = -basis.z * current_speed` makes travel and facing the same quantity, so the skater can
+## only move exactly where the board points - which forces landings to snap to a perfect 0/180, makes
+## slope gravity inexpressible, and leaves the sideways-landing test with nothing but an angle.
 ##
 ## While GROUNDED, y is held at zero and height belongs entirely to the surface snap in step 7, so
 ## only the horizontal components are integrated. While AIRBORNE, y is the ballistic vertical speed.
@@ -450,47 +360,38 @@ var velocity: Vector3 = Vector3.ZERO
 ## landings rather than guessed at.
 var last_landing_slide: float = 0.0
 
-## Horizontal rolling speed. READ ONLY, and deliberately so.
+## Horizontal rolling speed. READ ONLY - DO NOT make it settable.
 ##
-## It was briefly settable, rescaling the horizontal velocity in place to spare the call sites. That
-## is a magnitude abstraction sitting on a vector, and it silently means "change my speed but keep my
-## current direction" - correct for a crash, wrong for a push, with nothing to mark the difference.
-## It produced exactly one bug and would have produced more: pushing while drifting even slightly
-## sideways scaled the sideways component up along with the forward one, so a kick could accelerate
-## the skater along a crooked line instead of straightening it out.
-##
-## Anything that changes motion now states what it physically does to the VECTOR - see
-## _apply_push_impulse() for a directed drive and _kill_momentum() for a crash.
+## A setter is a magnitude abstraction on a vector: it silently means "change my speed, keep my
+## direction", which is correct for a crash and wrong for a push, with nothing marking the
+## difference. Pushing while drifting even slightly sideways scales the sideways component up with
+## the forward one, so a kick accelerates the skater along a crooked line instead of straightening
+## it. Anything that changes motion states what it does to the VECTOR - see _apply_push_impulse()
+## for a directed drive and _kill_momentum() for a crash.
 var current_speed: float:
 	get:
 		return flat_velocity.length()
 
-## Horizontal component of `velocity`, with y dropped. Computed, never stored, for the same reason
-## current_speed is: `velocity` already determines it completely.
-##
-## Worth having a name because "the horizontal part of the motion" is the quantity almost every
-## ground term actually means, and it was being rebuilt inline at six call sites - one of which
-## (`_apply_grounded_board_pitch`'s kickturn gate) had re-derived `current_speed` by hand.
+## Horizontal component of `velocity`, with y dropped. Computed, never stored: `velocity` already
+## determines it completely. This is the quantity almost every ground term actually means.
 var flat_velocity: Vector3:
 	get:
 		return Vector3(velocity.x, 0.0, velocity.z)
 
-## LIVE sideways speed across the wheels' rolling axis - the quantity grip is actively scrubbing off
-## right now. Computed, never stored, for the same reason `current_speed` is: `velocity` plus the rig
-## yaw already determine it completely, and a cached copy could disagree with them.
+## LIVE sideways speed across the wheels' rolling axis - what grip is actively scrubbing off right
+## now. Computed, never stored, so a cached copy cannot disagree with `velocity` and the rig yaw.
 ##
 ## Distinct from `last_landing_slide`, which is a LATCHED sample of this taken at touchdown and held
-## until the next one. Conflating the two is what made a stale HUD reading look like a physics leak:
-## the snapshot is meant to persist, and the live value decays to zero within about half a second.
+## until the next one. The snapshot is meant to persist; this decays to zero in about half a second.
+## Conflating the two made a stale HUD reading look like a physics leak - BUG_ARCHIVE #3.
 var lateral_speed: float:
 	get:
 		var flat: Vector3 = flat_velocity
 		var axis: Vector3 = _board_axis()
 		return (flat - axis * flat.dot(axis)).length()
 
-## Vertical component of `velocity`, under the name the airborne path and the HUD already used.
-## A bridge, not a second variable: two independent velocity representations is exactly the kind of
-## split that produced this system's earlier bugs.
+## Vertical component of `velocity`, under the name the airborne path and the HUD use. A view, not a
+## second variable - two independent velocity representations is the split this system removed.
 var vertical_velocity: float:
 	get: return velocity.y
 	set(value): velocity.y = value
@@ -541,8 +442,7 @@ func _truck_points() -> PackedVector3Array:
 	var yaw_basis := Basis(Vector3.UP, rotation.y)
 	var origin := global_position
 	var pts := PackedVector3Array()
-	# Footprint comes from the SAME measured axle position the manual pivot uses. It previously
-	# carried the deleted RayCast nodes' z = +/-0.28, which disagreed with the real axle at 0.225.
+	# Footprint comes from the SAME measured axle position the manual pivot uses - see manual_axle_z.
 	for sx in [-truck_half_width, truck_half_width]:
 		for sz in [-manual_axle_z, manual_axle_z]:
 			pts.append(origin + yaw_basis * Vector3(sx, 0.0, sz))
@@ -618,13 +518,9 @@ func _apply_manual_pivot() -> void:
 func _apply_push_impulse() -> void:
 	var axis: Vector3 = _board_axis()
 	var dir: Vector3 = axis if _travel_axis_sign >= 0.0 else -axis
-	# The ceiling is on SPEED, so it is measured against total ground speed rather than against the
-	# along-axis component. Clamping the component instead let a push top that component up to the
-	# full 7 m/s while a sideways drift sat on top of it, so pushing out of a crooked landing reached
-	# 8.3 m/s - over a ceiling the rest of the game treats as absolute.
-	#
-	# The impulse is still applied purely along the rolling axis: that is what lets grip scrub the
-	# lateral component away and straighten a crooked roll, rather than entrenching it.
+	# The ceiling is on SPEED, so it is measured against total ground speed, not the along-axis
+	# component. Clamping the component instead lets a push top it up to the full 7 m/s with a
+	# sideways drift on top, reaching 8.3 m/s over a ceiling the rest of the game treats as absolute.
 	#
 	# maxf guards the downhill case: gravity can legitimately carry the skater past max_push_speed,
 	# and a push must never become a brake.
@@ -726,12 +622,10 @@ func rider_pitch_deg() -> float:
 ##
 ## A statement about FRAMES, not about where the rider is going - see the block comment above.
 ##
-## Reads the RIDER's frame, not the board's. Being switch is a fact about the person: it means their
-## body faces the opposite way down the line they are travelling. It was previously read off
-## BoardPivot only because the rider had no frame of their own to read - the board carried the
-## rider's 0/180 flip along with its own yaw, and the two were indistinguishable. They coincide
-## while the coupling is rigid, so this is the same answer today; it stops being the same answer the
-## moment a slide turns the deck across the rider, which is exactly the case this split exists for.
+## Reads the RIDER's frame, not the board's. Being switch is a fact about the person: their body
+## faces the opposite way down the line they are travelling. The two coincide while the coupling is
+## rigid, and stop coinciding the moment a slide turns the deck across the rider - which is the case
+## this split exists for.
 func pivot_reversed() -> bool:
 	return cos(rider_body.rotation.y) < 0.0
 
@@ -758,30 +652,26 @@ func flip_roll_sign() -> float:
 
 ## How much of the rider's weight is available to lean the deck with, from 0 (none) to 1 (all).
 ##
-## Carving works by leaning the deck onto its bushings, which needs weight over both trucks. Every
-## body state that takes weight off one of them reduces it, so rather than each such state bolting
-## another multiplier onto the steering rate, they are listed here as contributors.
+## Carving leans the deck onto its bushings, which needs weight over both trucks. Every body state
+## that takes weight off one registers here as a contributor, rather than bolting its own multiplier
+## onto the steering rate. Grinds hang off here when they arrive.
 ##
-## The most restrictive contributor governs rather than the product, because these are ALTERNATIVE
-## body positions, not stacking ones - a rider mid-push is not also loading the tail, and
-## multiplying two near-zero factors would only produce an authority no state actually calls for.
-##
-## Grinds and manuals hang off here when they arrive.
+## THE MOST RESTRICTIVE CONTRIBUTOR GOVERNS, not the product: these are ALTERNATIVE body positions,
+## not stacking ones - a rider mid-push is not also loading the tail - and multiplying two near-zero
+## factors produces an authority no state actually calls for.
 func _lean_authority() -> float:
 	var authority: float = 1.0
-	# A manual is BALANCE, not a pop load, and the two are not distinguishable by stick depth alone:
-	# is_preparing_pop() fires at pop_load_threshold, so a deep manual was being charged the pop's
-	# 80% damping. That put a cliff at 0.70 - full authority below it, a fifth of it above - and
-	# steering that falls away mid-manual is exactly what "too stiff" feels like. Checked FIRST, so
-	# an established manual is never mistaken for a rider winding up to pop.
+	# CHECKED FIRST, so an established manual is never mistaken for a rider winding up to pop. Stick
+	# depth alone cannot tell them apart - is_preparing_pop() fires at pop_load_threshold, so a deep
+	# manual otherwise gets charged the pop's damping, putting a cliff at 0.70. Steering that falls
+	# away mid-manual is exactly what "too stiff" feels like.
 	if is_manualing():
 		authority = minf(authority, manual_turn_damping)
 	# Loading a pop shifts the weight back onto the tail, ready to snap it down.
 	elif trick.is_preparing_pop():
 		authority = minf(authority, pop_load_turn_damping)
-	# Pushing puts a foot on the ground, leaving nothing over the back truck to lean with. Recovers
-	# as the stroke completes rather than snapping back, which is both what happens physically and
-	# smoother than a step change.
+	# Pushing puts a foot on the ground, leaving nothing over the back truck to lean with. Recovers as
+	# the stroke completes rather than snapping back - what happens physically, and smoother.
 	if _since_push < push_stroke_time:
 		authority = minf(authority, lerpf(push_turn_damping, 1.0, _since_push / push_stroke_time))
 	return authority
@@ -799,9 +689,8 @@ func is_manualing() -> bool:
 
 ## Ground dynamics: slope gravity, wheel grip and rolling friction.
 ##
-## These three used to be, respectively: absent entirely, a snap-to-perfect plus a fixed angle bail,
-## and a scalar decrement. They are one function now because they are one phenomenon - a contact
-## patch that is free along one axis, gripping across it, and pulled downhill by gravity.
+## One function because they are ONE phenomenon - a contact patch that is free along one axis,
+## gripping across it, and pulled downhill by gravity. Splitting them apart loses that.
 ##
 ## Height is NOT integrated here. While grounded the surface snap owns it outright, so this only ever
 ## needs the horizontal projection of the along-slope acceleration, and y is pinned to zero.
@@ -818,9 +707,8 @@ func _apply_ground_forces(delta: float) -> void:
 
 	# Wheel anisotropy. Everything about imperfect landings falls out of this split: the component
 	# along the rolling axis survives, the component across it is scrubbed off against grip. That
-	# scrub IS the speed penalty - landing 5 deg off costs cos(5 deg), i.e. almost nothing, while
-	# landing 60 deg off costs most of your speed. Carving pays the same toll, which is why steering
-	# now has weight to it.
+	# scrub IS the speed penalty - landing 5 deg off costs cos(5 deg), almost nothing, while landing
+	# 60 deg off costs most of your speed. Carving pays the same toll, which gives steering weight.
 	var axis: Vector3 = _board_axis()
 	var lateral: Vector3 = flat - axis * flat.dot(axis)
 
@@ -831,13 +719,13 @@ func _apply_ground_forces(delta: float) -> void:
 	_landing_residual = maxf(0.0,
 		_landing_residual - flat.length() * deg_to_rad(landing_turn_rate_deg) * delta)
 
-	# Grip then removes everything ABOVE that budget at full strength. Two consequences, and they
-	# are the entire point:
-	#   - At touchdown lateral equals the budget, so limit_length() is a no-op and the residual
-	#     works off at the paced rate. The landing feels exactly as it did.
+	# Grip then removes everything ABOVE that budget at full strength. Two consequences, and they are
+	# the entire point:
+	#   - At touchdown lateral equals the budget, so limit_length() is a no-op and the residual works
+	#     off at the paced rate.
 	#   - Lateral the rider adds by STEERING sits above the budget, so it meets full grip and is
-	#     scrubbed immediately. Carving stays tight, and a held trigger can no longer prop the
-	#     board sideways, because nothing the rider does can raise the budget.
+	#     scrubbed immediately. A held trigger cannot prop the board sideways, because nothing the
+	#     rider does can raise the budget.
 	# Once the budget reaches zero this is a plain move_toward(ZERO), i.e. ordinary wheel grip.
 	flat += lateral.move_toward(lateral.limit_length(_landing_residual), wheel_side_grip * delta) - lateral
 
@@ -913,22 +801,17 @@ func _physics_process(delta: float) -> void:
 	if is_grounded:
 		_apply_grounded_board_pitch(delta)
 
-	# 8c. Let the suspension extend back out, pose the feet, then advance the camera.
+	# 8c. Let the suspension extend back out, pose the feet, then advance the camera. Three orderings
+	# here are load-bearing:
 	#
-	# The feet are solved HERE, once, rather than at the three points through the frame they used to
-	# be spread across (an animate() before step 2, hover/lower inside the flight block, a settle()
-	# in the grounded block). Every fact a foot pose depends on is final by now, so gathering them
-	# into one call is what lets FootRig arbitrate between competing animations inside its own state
-	# machine instead of leaving "which one wins" to be reconstructed from three call sites and
-	# their order. It runs BEFORE the camera so the ankle pegs resolve against the same camera yaw
-	# they always did - they work in the angle between the camera and the board, and the camera has
-	# not moved yet this frame.
-	#
-	# The camera MUST run here, after step 7 has integrated position: it feeds velocity forward and
-	# damps toward global_position, so advancing it earlier would frame where the skater was rather
-	# than where they now are.
-	# The rider's legs advance BEFORE the feet are posed, because the feet are the end of the legs.
-	# Grounded clamps them out to standing, so a landing arriving early simply meets the feet.
+	#   - The feet are solved ONCE, here, because every fact a foot pose depends on is final by now.
+	#     That is what lets FootRig arbitrate between competing animations inside its own state
+	#     machine rather than leaving "which one wins" to be reconstructed from several call sites.
+	#   - Legs BEFORE feet, because the feet are the end of the legs. Grounded clamps them out to
+	#     standing, so a landing arriving early simply meets the feet.
+	#   - Feet BEFORE the camera, so the ankle pegs resolve against a camera yaw that has not moved
+	#     yet this frame (CLEANUP.md #3). And the camera MUST run after step 7 has integrated
+	#     position, or it frames where the skater was rather than where they now are.
 	rider_body.solve_legs(delta, is_grounded, _deck_clearance_demand())
 	_recover_landing_dip(delta)
 	_foot_frame.is_grounded = is_grounded
@@ -943,18 +826,14 @@ func _physics_process(delta: float) -> void:
 
 ## Step 1. Grounded vs airborne, measured against real geometry rather than a fixed plane.
 ##
-## Proximity may only KEEP the skater grounded, never make them grounded. The airborne -> grounded
-## transition belongs exclusively to the touchdown path in step 6, which is what zeroes
-## vertical_velocity and runs _evaluate_touchdown_landing() (landing tolerances, bail checks,
-## trick naming). Letting this block flip the flag on proximity skipped all of that whenever the
-## skater entered the snap band gently - rolling off a low curb left v_speed stuck negative
-## forever and never resolved the trick name.
+## PROXIMITY MAY ONLY KEEP THE SKATER GROUNDED, NEVER MAKE THEM GROUNDED. The airborne -> grounded
+## transition belongs exclusively to the touchdown path in step 6, which zeroes vertical_velocity and
+## runs _evaluate_touchdown_landing() (landing tolerances, bail checks, trick naming). Flipping the
+## flag here on proximity skips all of it whenever the skater enters the snap band gently.
 ##
-## The old first clause here was `if vertical_velocity > 0.05: is_grounded = false`. It had to go
-## once slopes went live: velocity is no longer purely horizontal in intent, and any test of world
-## Y against zero misreads a skater rolling uphill as one leaving the ground. It was only ever a
-## belt-and-braces guard - the pop in step 5 sets is_grounded = false explicitly, and nothing else
-## can lift the skater off a surface - so removing it costs nothing.
+## Do not add a `vertical_velocity > 0` guard: with slopes live, any test of world Y against zero
+## misreads a skater rolling uphill as one leaving the ground. Nothing but the pop in step 5 can lift
+## the skater off a surface, and it sets the flag explicitly.
 func _update_grounded_state() -> void:
 	surface_hit = _probe_surface()
 	if not surface_hit.valid:
@@ -966,33 +845,25 @@ func _update_grounded_state() -> void:
 ## a skater stalling to a stop keeps the direction they were rolling rather than snapping to the
 ## rig's static forward.
 func _update_travel_axis_sign() -> void:
-	# Measured ALONG THE WHEELS, not on total speed. Gating on total speed and then reading a tiny
-	# along-axis component let motion that was almost entirely SIDEWAYS set which way the rider is
-	# travelling: a standing directional pop leaps perpendicular to the deck at over 1 m/s, clearing
-	# any speed gate, while the along-axis component is near zero and its sign is noise. That fed
-	# leading_foot, which fed the kickturn axle, and the board pivoted on the wrong truck after
-	# landing. Same mistake the chase camera made with its heading, in a second consumer.
+	# Measured ALONG THE WHEELS, not on total speed. A standing directional pop leaps perpendicular to
+	# the deck at over 1 m/s, clearing any total-speed gate while the along-axis component is near
+	# zero and its sign is noise - which then feeds leading_foot, the kickturn axle, and a board that
+	# pivots on the wrong truck. ChaseCamera.follow() guards its heading the same way.
 	var axis: Vector3 = _board_axis()
 	var along: float = flat_velocity.dot(axis)
 	if absf(along) > travel_min_speed:
 		_travel_axis_sign = 1.0 if along >= 0.0 else -1.0
 
-## Hands FootInputState the geometry it needs to work out which foot is leading, and which end of
-## the DECK each shoe is standing on.
+## Hands RiderInput the geometry it needs to work out which foot is leading, and which end of the
+## DECK each shoe is standing on. Three things here are load-bearing:
 ##
-## Passes the shoes' REST offsets, not their live nodes: foot placement is a property of how the
-## rider stands on the board, not of what an animation is doing this instant. See
-## update_stance_facts() for why that distinction is load-bearing.
-##
-## Passes SkaterRoot, not board_pivot: update_stance_facts() reads pivot.get_parent() for the
-## stationary forward vector, and that parent is now the surface-tilted SurfaceAlign node.
-## Horizontal velocity only. `velocity` now carries the ballistic vertical speed too, and during a
-## pop that term dominates - passing it whole would point the travel vector nearly straight up and
-## scramble the leading/trailing foot test for the whole flight.
-##
-## The last argument is whether the DECK is turned 180 deg from rest. Nose and tail are fixed
-## attributes of the board, so a landed shove-it puts the tail at the leading end without moving the
-## rider at all - read the deck's real orientation rather than inferring it from the rider's stance.
+##   - The shoes' REST offsets, not their live nodes. Foot placement is a property of how the rider
+##     stands on the board, not of what an animation is doing this instant.
+##   - SkaterRoot, not board_pivot: update_stance_facts() reads pivot.get_parent() for the stationary
+##     forward vector, and that parent is the surface-tilted SurfaceAlign node.
+##   - Whether the DECK is turned 180 from rest, read rather than inferred from the rider's stance.
+##     Nose and tail are fixed attributes of the board, so a landed shove-it puts the tail at the
+##     leading end without the rider moving at all.
 func _update_stance_facts() -> void:
 	rider.update_stance_facts(board_pivot, foot_rig.left_rest, foot_rig.right_rest,
 		self, _travel_axis_sign, deck_reversed())
@@ -1005,10 +876,9 @@ func _apply_push_inputs() -> void:
 		_apply_push_impulse()
 		_since_push = 0.0
 		# The animation may REFUSE - both shoes never leave the deck at once, so a press arriving
-		# mid-stroke is dropped. The physical impulse above is applied either way: whether pushing
-		# should also be rate-limited in the physics is a gameplay question, and answering it
-		# silently here by gating on an animation would be exactly the animation-decides-an-outcome
-		# coupling this project has removed everywhere else.
+		# mid-stroke is dropped. The physical impulse above is applied either way. Whether pushing
+		# should be rate-limited is a gameplay question; answering it here by gating on an animation
+		# would be the animation-decides-an-outcome coupling this project avoids. CLEANUP.md #2.
 		if rider.push_left_triggered:
 			foot_rig.start_push(RiderInput.Foot.LEFT)
 		else:
@@ -1042,45 +912,34 @@ func _apply_steering(delta: float) -> void:
 		elif speed < 0.05:
 			_is_carve_latched = false
 
-	# How hard the rider is leaning, times however much of their weight is actually available to lean
-	# WITH - see _lean_authority(), which is where pop loading, pushing, manuals and later grinds all
-	# register their cost. Damps STEERING only, never the push impulse: gating a gameplay term on a
-	# body state is fine, gating it on an ANIMATION is not.
+	# Lean, times however much of the rider's weight is available to lean WITH - see _lean_authority().
+	# Damps STEERING only, never the push impulse: gating a gameplay term on a body state is fine,
+	# gating it on an ANIMATION is not.
 	var effective_lean: float = rider.lean * _lean_authority() if leaning else 0.0
 	var target_rate: float
 
 	if not _is_carve_latched:
 		# Muscle, not wheels - see kickturn_rate. Stays a flat rate where carving cannot.
 		target_rate = effective_lean * kickturn_rate
-		# Stationary Kickturn: anchor the rotation on the axle that is ON THE GROUND, so the back
-		# tyres stay locked to the pavement while the nose swings round.
-		#
-		# The trailing axle is a BoardPivot-relative fact and the rotation below happens in the RIG's
-		# frame, so it has to be carried across - which is the whole reason pivot_z_to_rig() exists.
-		# Deriving the axle without it anchored the LEADING truck in switch, and since a kickturn
-		# lifts the leading trucks, that made the airborne one the pivot (BUG_ARCHIVE #6).
 	else:
 		# Carving: lean sets a turn RADIUS, and omega = v / R follows. Lean scales CURVATURE rather
 		# than radius, because lean maps to a truck STEER ANGLE and curvature is what is linear in
 		# that angle - so half lean is a 6 m arc, not a 1.5 m one.
 		#
-		# The speed term is the whole point. A flat rate held the same 172 deg/s at 2 m/s as at 7,
-		# which is ~4x too fast down there: the board spun on the spot instead of arcing, and that
-		# is what read as darty rather than weighted. Now the same lean draws the same arc at any
-		# speed, and the rate rises with speed on its own with no special cases.
+		# The speed term is the whole point: a flat rate holds the same 172 deg/s at 2 m/s as at 7,
+		# ~4x too fast down there, so the board spins on the spot instead of arcing. This way the same
+		# lean draws the same arc at any speed with no special cases.
 		#
-		# Planar SPEED, unsigned. Rolling fakie therefore still steers the way it does today; a real
-		# board reverses its steering when rolled backwards, but that is a separate change with its
-		# own sign consequences (_travel_axis_sign, the landing residual) and is not part of 07a.
+		# Planar SPEED, unsigned, so rolling fakie steers the same way. A real board reverses its
+		# steering rolled backwards, but that change carries its own sign consequences
+		# (_travel_axis_sign, the landing residual) and has not been made.
 		var radius: float = rider.board_config.carve_radius_m if is_instance_valid(rider.board_config) else 3.0
 		target_rate = speed * effective_lean / maxf(radius, 0.01)
 
-	# THE LERP. Bushings are rubber and the rider is a mass: neither the deck nor the body arrives at
-	# a new lean angle in one frame. Airborne body spin has always eased in at RiderBody.spin_response,
-	# so a ground steer that snapped to full rate instantly was the one rotation in the sim with no
-	# inertia at all, and that asymmetry is what reads as the board being weightless underfoot.
-	#
-	# Eases BOTH ways, which is half the point: letting go of a carve unwinds it over a few frames
+	# THE LERP. Bushings are rubber and the rider is a mass: neither arrives at a new lean angle in
+	# one frame. Airborne body spin eases in at RiderBody.spin_response, so a ground steer snapping to
+	# full rate was the one rotation in the sim with no inertia - which is what reads as the board
+	# being weightless underfoot. Eases BOTH ways, so letting go of a carve unwinds over a few frames
 	# rather than stopping the turn dead.
 	_steer_rate = lerpf(_steer_rate, target_rate, minf(steer_response * delta, 1.0))
 	if absf(_steer_rate) < 0.001:
@@ -1090,8 +949,13 @@ func _apply_steering(delta: float) -> void:
 		return
 
 	if not _is_carve_latched:
-		# Anchored on the axle that is ON THE GROUND, so the back tyres stay locked to the pavement
-		# while the nose swings round.
+		# Stationary kickturn: anchor on the axle that is ON THE GROUND, so the back tyres stay locked
+		# to the pavement while the nose swings round.
+		#
+		# The trailing axle is a BoardPivot-relative fact and the rotation happens in the RIG's frame,
+		# so it MUST be carried across by pivot_z_to_rig(). Without that it anchors the LEADING truck
+		# in switch - and since a kickturn lifts the leading trucks, that is the airborne one.
+		# BUG_ARCHIVE #6.
 		var axle_local_pos := Vector3(0.0, -(ride_height - wheel_radius),
 			pivot_z_to_rig(trailing_axle_z()))
 		var axle_world_before: Vector3 = to_global(axle_local_pos)
@@ -1114,11 +978,7 @@ func _execute_pop() -> void:
 
 	# ANGULAR MOMENTUM CROSSES THE TAKEOFF. Leaving the ground removes the TORQUE on the rider, not
 	# their rotation - so a rider popping mid-carve keeps turning, and the carve becomes the spin.
-	#
-	# Without this the ground rate was dropped to zero on the pop frame while airborne spin started
-	# again from zero, so every takeoff out of a turn had a yaw-rate step of up to ~134 deg/s in it
-	# (full lean at 7 m/s). That is the same missing term 07b found on the deck's own rotation, in the
-	# one rotation nobody had checked: the deck accelerates, the body did not.
+	# Without it, every takeoff out of a turn has a yaw-rate step of up to ~134 deg/s in it.
 	#
 	# Assigned rather than added because the shoulders are provably at rest here - advance_spin() only
 	# runs airborne, and halt_spin() zeroes it at every touchdown. `_steer_rate` is still the live
@@ -1131,13 +991,12 @@ func _execute_pop() -> void:
 		lateral_axis.y = 0.0
 		velocity += lateral_axis.normalized() * (trick.pop_lateral_impulse_ratio * max_lateral_pop_impulse)
 		# The deck kicking out under a directional pop is a twist between rider and board, so it winds
-		# the torsion rather than being written straight onto the board's yaw. Written the old way it
-		# would be a yaw the coupling never agreed to, and the torsion would quietly undo it.
+		# the torsion rather than being written straight onto the board's yaw - which would be a yaw
+		# the coupling never agreed to, and the torsion would quietly undo it.
 		#
 		# MIND THE SIGN. wind_twist() records how far the board is AHEAD of the rider, and relaxing
 		# that twist is what turns the deck - so the board ends up moving by MINUS the wound amount.
-		# Winding by -ratio (the direction the deck should end up going) therefore kicked it the wrong
-		# way, and no suite caught it because none of them pops laterally.
+		# Winding by -ratio kicks it the wrong way. No suite covers this; none of them pops laterally.
 		rider_body.wind_twist(trick.pop_lateral_impulse_ratio * lateral_pop_yaw_deg)
 		trick.pop_lateral_impulse_ratio = 0.0
 
@@ -1170,10 +1029,9 @@ func _execute_pop() -> void:
 	# after a Shove-it needs compensating here - Nollie/Fakie flip mirroring is already applied
 	# in TrickState._build_trick_signature(), so there is no stance term.
 	#
-	# Targets are built off the nearest RESTING orientation, not off the raw current angle: popping
-	# again mid-settle would otherwise bake the few unsettled degrees in permanently, and every
-	# later trick would inherit the error. When the deck is already at rest - the normal case -
-	# rounding is a no-op and the target is unchanged.
+	# Targets are built off the nearest RESTING orientation, not the raw current angle: popping again
+	# mid-settle would otherwise bake the unsettled degrees in permanently and every later trick would
+	# inherit the error. At rest - the normal case - the rounding is a no-op.
 	_roll_rest_at_pop = _nearest_multiple(board_mesh.rotation_degrees.z, 360.0)
 	_yaw_rest_at_pop = _nearest_multiple(board_mesh.rotation_degrees.y, 180.0)
 	if sig.flip == TrickSignature.Flip.KICK:
@@ -1212,15 +1070,13 @@ func _integrate_flight(delta: float) -> void:
 
 	# Layer 1: Aerial Body Spin (FS/BS 180s/360s via triggers, with the rider's own rotational inertia)
 	#
-	# The RIDER turns and the board is carried round with them, rather than the deck being spun and
-	# the rider inferred from it. That is the physically true direction, and it is what lets the two
-	# come apart later: a boardslide puts the deck across the direction of travel while the rider
-	# still faces near-forward, which is not expressible while one of them IS the other.
+	# The RIDER turns and the board is carried round with them, not the reverse. That is what lets the
+	# two come apart later: a boardslide puts the deck across the direction of travel while the rider
+	# still faces near-forward, which is inexpressible while one of them IS the other.
 	#
 	# The board follows through the TORSION, not by taking the shoulders' delta outright. Turning the
 	# shoulders winds the twist up; relaxing it is what turns the deck. At the default twist_follow
-	# the whole wind-up closes within the same frame, so the deck still tracks the rider exactly and
-	# every previous figure is reproduced - softening it is a separate, deliberate change.
+	# the wind-up closes within the same frame, so the deck still tracks the rider exactly.
 	var turned: float = rider_body.advance_spin(rider.lean, delta)
 	if turned != 0.0:
 		rider_body.wind_twist(-turned) # the shoulders moved; the deck has not caught up yet
@@ -1231,22 +1087,17 @@ func _integrate_flight(delta: float) -> void:
 	# Layer 2: Mid-Air Pitch Control (0.20 to 1.00 thumbsticks to angle nose/tail in air)
 	_apply_airborne_board_pitch(delta)
 
-	# Layer 3: Deck Flip & Spin Authority on BoardMesh with Shoe Hover Catching.
-	# Rates were fixed at the pop and are simply integrated here; both axes were scaled to the
-	# same trick duration, so they arrive together on the same frame however they are combined.
-	# The feet are NOT posed here any more. is_flip_in_progress is handed to FootRig as
-	# `deck_is_spinning` in step 8c, and its state machine decides whether that means hovering clear
-	# of the deck or returning to the rest pose - which is the same choice the hover()/lower() pair
-	# used to make from inside this block, but made in one place alongside every other foot state.
-	# ONE factor, scaling both axes together. Flip/scoop sync is a rate-RATIO lock - the two axes
-	# arrive together because their rates are in proportion - so anything that scales a rate has to
-	# scale both by the SAME number. Ramping each axis on its own timer would pull a tre flip apart
-	# during the ramp and put it back together afterwards.
+	# Layer 3: Deck Flip & Spin Authority on BoardMesh. Rates were fixed at the pop and are simply
+	# integrated here; both axes were scaled to the same trick duration, so they arrive together
+	# however they are combined. The feet are posed in step 8c, not here.
 	#
-	# The catch ramp is applied only when the rider is NOT still holding the flick. That is physically
-	# the right test - a rider holding a spin is not catching it - and it is also what keeps the
-	# free-spin handover invisible: the deck reaches turn 1 at full rate and carries straight on,
-	# rather than decelerating into the handover and then jumping back to full.
+	# ONE factor, scaling both axes together. Flip/scoop sync is a rate-RATIO lock, so anything that
+	# scales a rate must scale both by the SAME number. Ramping each axis on its own timer would pull
+	# a tre flip apart during the ramp and put it back together afterwards.
+	#
+	# The catch ramp applies only when the rider is NOT still holding the flick - a rider holding a
+	# spin is not catching it, and it keeps the free-spin handover invisible: the deck reaches turn 1
+	# at full rate and carries straight on rather than decelerating and jumping back to full.
 	var spin: float = _spin_up_scale(delta)
 	if not trick.flick_held:
 		spin *= _catch_scale()
@@ -1258,10 +1109,9 @@ func _integrate_flight(delta: float) -> void:
 		board_mesh.rotation_degrees.z += flip_roll_rate * spin * delta
 		board_mesh.rotation_degrees.y += flip_yaw_rate * spin * delta
 		if not trick.flick_held:
-			# Let go. Hand to the settle, which rounds to the NEAREST resting orientation and takes
-			# the short way there - so two and a half turns carry on to three, while two and a tenth
-			# unwind back to two. Nothing is quantised up front and nothing is committed to in
-			# advance: the rider stops when they stop, and the deck tidies up from wherever that was.
+			# Let go. The settle rounds to the NEAREST resting orientation and takes the short way -
+			# two and a half turns carry on to three, two and a tenth unwind back to two. Nothing is
+			# quantised or committed to in advance; the deck tidies up from wherever the rider stopped.
 			is_flip_in_progress = false
 			is_flip_settling = true
 			# The rider is reaching to catch it, so it may only be corrected back as far as they
@@ -1303,8 +1153,8 @@ func _integrate_flight(delta: float) -> void:
 		_evaluate_touchdown_landing()
 
 ## Step 7. Position integration, blocked by vertical faces. `velocity` is authoritative and is NOT
-## rebuilt from orientation here - that rebuild was the whole bug. Only the horizontal components
-## move the skater; while grounded the surface snap at the end owns height entirely.
+## rebuilt from orientation here - see the field. Only the horizontal components move the skater;
+## while grounded the surface snap at the end owns height entirely.
 func _integrate_position(delta: float) -> void:
 	var travel: Vector3 = flat_velocity * delta
 	if _blocked_by_wall(travel):
@@ -1332,16 +1182,13 @@ static func _nearest_multiple(value: float, step: float) -> float:
 ## Sets the deck's angular velocity for the trick just popped, scaling BOTH axes onto one shared
 ## duration so they finish together.
 ##
-## A trick is one event: the rider flicks and scoops in a single motion and catches the board once,
-## with both rotations complete. Driving roll and yaw at independent fixed rates broke that - a 360
-## flip's yaw ran at spin_speed_deg * 2 (0.42 s) while its roll ran at flip_speed_deg (0.59 s), so
-## the deck finished spinning a fifth of a second before it finished flipping. On screen the board
-## stopped rotating on one axis mid-trick and kept going on the other, then stopped dead.
+## A trick is ONE event: the rider flicks and scoops in a single motion and catches the board once,
+## with both rotations complete. Independent fixed rates break that - the deck stops rotating on one
+## axis mid-trick, keeps going on the other, then halts. BUG_ARCHIVE #2.
 ##
-## The duration is the SLOWER of the two axes' natural times, and the faster axis is slowed to match.
-## Scaling to the faster one instead would speed rotations up beyond their tuned reference rates and
-## shorten every combined trick. Single-axis tricks have nothing to reconcile, so their timing is
-## exactly what it always was.
+## The duration is the SLOWER of the two axes' natural times, with the faster slowed to match.
+## Scaling to the faster one instead would push rotations past their tuned reference rates and
+## shorten every combined trick. Single-axis tricks have nothing to reconcile.
 func _impart_deck_rotation(sig: TrickSignature) -> void:
 	var roll_sweep: float = target_board_roll - board_mesh.rotation_degrees.z
 	var yaw_sweep: float = target_board_yaw - board_mesh.rotation_degrees.y
@@ -1351,10 +1198,9 @@ func _impart_deck_rotation(sig: TrickSignature) -> void:
 	var roll_time: float = absf(roll_sweep) / flip_speed_deg if flip_speed_deg > 0.0 else 0.0
 	var yaw_time: float = absf(yaw_sweep) / yaw_ref if yaw_ref > 0.0 else 0.0
 	
-	# Multi-axis rotational inertia coupling: combining simultaneous rotation axes in 3D distributes
-	# angular kinetic energy and extends revolution duration. A 360 flip (360 scoop + flip) carries
-	# twice the secondary angular displacement of a varial flip (180 scoop + flip), naturally extending
-	# its completion and procedural mid-air catch stomp slightly later past jump apex!
+	# Multi-axis rotational inertia: combining rotation axes in 3D distributes angular kinetic energy
+	# and extends the revolution. A 360 flip carries twice the secondary angular displacement of a
+	# varial flip, so it lands its catch slightly later past apex.
 	var primary_time: float = maxf(roll_time, yaw_time)
 	var secondary_time: float = minf(roll_time, yaw_time)
 	var complexity_drag: float = 0.0
@@ -1449,16 +1295,14 @@ func _flick_rate_scale(flick_speed: float) -> float:
 
 ## How far the rider must stay tucked for a TURNING deck to clear their feet, in metres.
 ##
-## A PEAK-HOLD of the deck's silhouette: it rises as the deck rolls toward edge-on and then never
-## falls back while the deck is still turning. Both halves matter, and each fixes a different bug.
+## A PEAK-HOLD of the deck's silhouette: it rises as the deck rolls toward edge-on and never falls
+## back while the deck is still turning. Both halves matter, and each fixes a different bug.
 ##
-##   RISING is what keeps the pop smooth. Jumping straight to the deck's widest reach the instant it
-##   starts turning stepped the feet 8.9 cm in a single frame - the deck is flat at that moment and
-##   needs no room at all.
-##   HOLDING is what stops the feet shaking. The raw silhouette oscillates twice per revolution, and
-##   once a held rotation outlasts the leg's tuck that oscillation is the ONLY thing moving the feet,
-##   so they pumped between 0.001 m and 0.089 m in time with the board. A rider tucks once and holds
-##   it; they do not pump their knees to the beat of their own board.
+##   RISING keeps the pop smooth. Jumping straight to the deck's widest reach the instant it starts
+##   turning steps the feet 8.9 cm in one frame, when the deck is flat and needs no room at all.
+##   HOLDING stops the feet shaking. The raw silhouette oscillates twice per revolution, and once a
+##   held rotation outlasts the leg's tuck that oscillation is the ONLY thing moving the feet - they
+##   pump between 0.001 m and 0.089 m in time with the board. A rider tucks once and holds it.
 ##
 ## Released the moment the deck stops turning, so the legs extend and bring the feet home under their
 ## own spring rather than in a step.
@@ -1476,11 +1320,6 @@ func _deck_clearance_demand() -> float:
 ## Targets are a CONSEQUENCE of how many turns the rider has asked for, not a number decided at the
 ## pop. Raising a turn count and calling this is the whole of "keep spinning" - the rate is untouched,
 ## so the deck simply takes longer to arrive rather than speeding up to hit a moved goalpost.
-##
-## Built off the RESTING orientation the trick started from, not the raw angle: popping again
-## mid-settle would otherwise bake the few unsettled degrees in permanently and every later trick
-## would inherit the error. When the deck is already at rest - the normal case - that rounding is a
-## no-op and the target is unchanged.
 func _refresh_rotation_targets() -> void:
 	target_board_roll = _roll_rest_at_pop + 360.0 * float(flip_roll_turns) * _roll_turn_dir
 	target_board_yaw = _yaw_rest_at_pop + 180.0 * float(flip_yaw_turns) * _yaw_turn_dir
@@ -1488,17 +1327,15 @@ func _refresh_rotation_targets() -> void:
 ## Which resting orientation the deck settles onto: the one just passed, or the next one ahead.
 ##
 ## A board with angular momentum does not spin BACKWARDS in mid-air. The rider can catch it and stop
-## it, which is a small correction with their feet, but nothing reverses a turning deck - so unwinding
-## more than a little reads as the simulation running in reverse. Past `_settle_unwind_deg` the
-## momentum wins and the deck carries on to the next rest instead.
+## it - a small correction with their feet - but unwinding much past that reads as the simulation
+## running in reverse. Beyond `_settle_unwind_deg` the momentum wins and it carries on to the next.
 ##
-## Costs no precision, which is the part that is not obvious: the window for "get exactly N turns" is
-## one full revolution wide wherever the boundary sits. Moving it changes the PHASE of the boundary,
-## never its width - so shrinking the unwind tolerance removes the ugly reversal without making the
-## timing any harder.
+## COSTS NO PRECISION, which is the non-obvious part: the window for "exactly N turns" is one full
+## revolution wide wherever the boundary sits, so moving it changes the boundary's PHASE, never its
+## width. Shrinking the unwind tolerance removes the ugly reversal without making the timing harder.
 ##
-## Direction comes from the spin the deck was GIVEN, not from how it happens to be moving now, which
-## is already backwards once it starts unwinding.
+## Direction comes from the spin the deck was GIVEN, not from how it is moving now - which is already
+## backwards once it starts unwinding.
 func _settle_target(angle: float, period: float, rate: float) -> float:
 	var dir: float = -1.0 if rate < 0.0 else 1.0
 	var behind: float = (floorf(angle / period) if dir > 0.0 else ceilf(angle / period)) * period
@@ -1510,11 +1347,10 @@ func _settle_target(angle: float, period: float, rate: float) -> float:
 
 ## Rotates a late-caught deck onto its resting orientation at the flip's own angular rate.
 ##
-## This is the whole reason a late catch does not look like a glitch. The board is never teleported
-## flat; the rotation it already carried keeps integrating for the few frames it takes to arrive, so
-## on screen the flip simply finishes under the rider's feet as they land - which is what a real late
-## catch looks like. Always rotates the SHORT way to the nearest resting orientation, so a flip that
-## barely started settles back the way it came instead of grinding out a full turn it never earned.
+## THE BOARD IS NEVER TELEPORTED FLAT - the rotation it already carried keeps integrating for the few
+## frames it takes to arrive, so on screen the flip finishes under the rider's feet as they land.
+## Always takes the SHORT way to the nearest rest, so a flip that barely started settles back the way
+## it came instead of grinding out a full turn it never earned.
 func _advance_flip_settle(delta: float) -> void:
 	if is_flip_in_progress or not is_flip_settling:
 		return
@@ -1537,11 +1373,9 @@ func _advance_flip_settle(delta: float) -> void:
 
 ## Rewrites the signature to the rotation the deck ACTUALLY completed.
 ##
-## Catching on orientation alone would otherwise credit the full trick however little the deck turned:
-## a board that had barely begun to flip is also within a few degrees of griptape-up, so popping onto
-## a high ledge would land and be named a kickflip. Orientation decides whether it is RIDEABLE; the
-## sweep achieved since the pop decides what it is CALLED. A 360 scoop that only made it half way is
-## credited as the 180 it actually did.
+## Orientation decides whether the landing is RIDEABLE; the sweep achieved since the pop decides what
+## it is CALLED. Without this split, a board that had barely begun to flip is also within a few
+## degrees of griptape-up, so popping onto a high ledge lands and is named a kickflip.
 func _credit_achieved_rotation() -> void:
 	var sig: TrickSignature = trick.current_trick
 	if sig.flip != TrickSignature.Flip.NONE:
@@ -1577,10 +1411,9 @@ func _apply_airborne_board_pitch(delta: float) -> void:
 		target_pitch_deg += front.y * max_pitch_deg # Nose dip (leading edge)
 
 	# The three terms above ADD, so a rider re-applying pitch during the ascent stacks their input on
-	# top of the pop's own tilt. Bounded by the pop angle itself, which is the steepest the deck is
-	# ever meant to sit at. Currently this rarely binds - airborne_pitch_follow is too slow to reach
-	# the stacked target before the pop term decays - and that is precisely why it is worth pinning
-	# down: raise the follow rate for responsiveness and the deck would whip to 74 deg without it.
+	# top of the pop's own tilt. Bounded by the pop angle, the steepest the deck is meant to sit at.
+	# Rarely binds today because airborne_pitch_follow is too slow to reach the stacked target before
+	# the pop term decays - but raise that rate for responsiveness and the deck whips to 74 deg.
 	target_pitch_deg = clampf(target_pitch_deg, -pop_pitch_deg, pop_pitch_deg)
 
 	board_pivot.rotation_degrees.x = lerpf(board_pivot.rotation_degrees.x,
@@ -1601,45 +1434,25 @@ func _finalise_trick_name() -> void:
 ##
 ## THE INVARIANT: on any grounded frame, `board_pivot.rotation_degrees.y` is a multiple of 180.
 ##
-## That is what makes the rig's heading and the deck's visible heading the same line, and the whole
-## sim leans on it. `_board_axis()` reads the RIG - so pushes, wheel grip, rolling friction, steering
-## and the lateral wash-out test all use the rig's forward as "where the wheels point". BoardPivot is
-## what the player actually sees. While the invariant holds, those agree; the moment it does not,
-## the physics is gripping along one axis while the board is drawn along another.
+## `_board_axis()` reads the RIG, so pushes, wheel grip, rolling friction, steering and the lateral
+## wash-out test all take the rig's forward as "where the wheels point". BoardPivot is what the
+## player sees. While the invariant holds those agree; the moment it does not, the physics grips
+## along one axis while the board is drawn along another - and it reads as ICE, not as a rotation bug.
 ##
-## IT USED TO BE SKIPPABLE, and that was a real bug. This block sat BELOW the primo / incomplete-flip
-## bail, which returns early - so bailing a flip while the body was mid-rotation left BoardPivot
-## holding the whole raw accumulated yaw and never told the rig. Measured on a probe: rig heading
-## 0.00 deg against a visible deck at -129.08 deg, with `board_pivot.rotation_degrees.y` sitting at
-## -849.08. Nothing grounded writes that field, so the disagreement then persisted until the next
-## SUCCESSFUL landing - across further pops included.
+## MUST STAY ABOVE EVERY BAIL BRANCH. It sat below the primo bail once, so bailing a flip mid-body-
+## rotation left BoardPivot holding the raw accumulated yaw and never told the rig. BUG_ARCHIVE #8.
 ##
-## What it felt like, and why it reads as ice rather than as a rotation bug: a kick drives along the
-## rig axis, `lateral_speed` is measured against the rig axis, so the push registered as pure
-## along-axis motion and grip found NOTHING to scrub - `lateral_speed` read 0.000 while the board
-## visibly slid 50.9 deg across its own wheels. Full grip, zero resistance, because both sides of the
-## test were wrong in the same direction. Only reproducible when a flip bailed AND the body was
-## turning, which is why it came and went.
+## Lands on the heading actually ACHIEVED rather than snapping to a perfect 0/180 - the residual is
+## transferred to the rig, not discarded. Land a 180 at 185 deg and you ride away 5 deg off your line
+## and have to steer out of it. The NAME is unaffected: _finalise_trick_name() rounds body yaw to
+## half-turns, so 185 still reads as a 180. Naming quantises, physics does not.
 ##
-## Land on the heading actually ACHIEVED, rather than snapping to a perfect 0/180: the residual is
-## transferred to the rig instead of being discarded. BoardPivot keeps only the 0/180 switch-stance
-## flip that every `cos(board_pivot.rotation_degrees.y)` test downstream depends on, while the rig
-## genuinely points where the rider landed. Land a 180 at 185 deg and you ride away 5 deg off your
-## old line and have to steer out of it; the error does not silently vanish.
+## The residual is bounded to +/-90 deg by the rounding, which keeps `_travel_axis_sign` valid across
+## the transfer without re-deriving it: the old travel direction dots the new axis with
+## cos(residual) >= 0, so its sign cannot flip.
 ##
-## The trick NAME is unaffected: _finalise_trick_name() already rounds body yaw to half-turns, so
-## 185 deg still reads as a 180. Naming quantises, physics does not.
-##
-## Note the residual handed to the rig is bounded to +/-90 deg by the rounding, which is what keeps
-## `_travel_axis_sign` valid across the transfer without needing to be re-derived: the old travel
-## direction dots the new axis with cos(residual) >= 0, so its SIGN cannot flip.
-##
-## On a tilted surface the rig and pivot yaws are separated by SurfaceAlign's pitch and roll, so the
-## transfer is exact only on flat ground. At plausible landing residuals and ramp angles the error
-## stays well under a degree - not worth carrying a quaternion for.
-##
-## Nothing is handed to the camera here. It tracks the direction of TRAVEL, which does not jump at
-## touchdown - only the rig's heading does - so there is no discontinuity to absorb.
+## Exact only on flat ground - on a tilted surface SurfaceAlign's pitch and roll separate the rig and
+## pivot yaws. At plausible residuals and ramp angles the error stays under a degree.
 func _reconcile_landing_frames() -> void:
 	var rest_yaw: float = _nearest_multiple(board_pivot.rotation_degrees.y, 180.0)
 	rotate_y(deg_to_rad(board_pivot.rotation_degrees.y - rest_yaw))
@@ -1672,12 +1485,10 @@ func _evaluate_touchdown_landing() -> void:
 
 	# Primo / Incomplete Flip Check.
 	#
-	# Judged on where the deck IS, not on whether a fixed-duration animation finished. The old test
-	# was `is_flip_in_progress`, which is true until the deck sweeps a full 360 at flip_speed_deg -
-	# a constant 0.60 s regardless of hang time. Hang time, meanwhile, shrinks with the height gained
-	# from takeoff surface to landing surface, so popping onto a 0.30 m curb gave 0.58 s and every
-	# kickflip onto it bailed one frame short, deterministically. Nothing below reads airtime, ledge
-	# height, gravity or frame rate; re-tuning any of them can no longer make a trick unlandable.
+	# Judged on where the deck IS, never on whether an animation finished. Nothing below reads
+	# airtime, ledge height, gravity or frame rate, so re-tuning any of them cannot make a trick
+	# unlandable - which a fixed-duration test did, deterministically, for any raised surface.
+	# BUG_ARCHIVE #1.
 	if is_flip_in_progress or is_flip_settling:
 		var roll_err: float = absf(board_mesh.rotation_degrees.z - _nearest_multiple(board_mesh.rotation_degrees.z, 360.0))
 		var yaw_err: float = absf(board_mesh.rotation_degrees.y - _nearest_multiple(board_mesh.rotation_degrees.y, 180.0))
@@ -1693,10 +1504,10 @@ func _evaluate_touchdown_landing() -> void:
 			manual_timer = 0.0
 			return
 		# Caught. Only the component of momentum still aligned with the roll direction survives the
-		# stamp that flattens the deck, so a dead-flat catch keeps everything and one out at the edge
-		# of the cone costs ~30%. Execution deliberately falls through from here into the manual and
-		# landing checks below: the old early `return` skipped them, which is why an incomplete flip
-		# presented as "manuals do not work after a flip trick" rather than as a failed landing.
+		# stamp that flattens the deck, so a dead-flat catch keeps everything and one at the edge of
+		# the cone costs ~30%. EXECUTION MUST FALL THROUGH into the manual and landing checks below -
+		# an early `return` here is what made an incomplete flip present as "manuals don't work after
+		# a flip trick" rather than as a failed landing. BUG_ARCHIVE #1, and CLEANUP.md #1.
 		is_flip_in_progress = false
 		is_flip_settling = true
 		# Landing slammed it flat, so a big correction is exactly what happened. Half a period is
@@ -1712,22 +1523,17 @@ func _evaluate_touchdown_landing() -> void:
 
 	# Sideways landing, judged on MOMENTUM rather than angle. Wheels hold only so much lateral speed
 	# before washing out, so the identical 90 deg landing is survivable at walking pace and fatal at
-	# full speed - a distinction the old fixed 45-135 deg window could not express at all. Anything
-	# under the limit is not "forgiven" either: the lateral component is still scrubbed off against
-	# grip by _apply_ground_forces(), so a sketchy landing costs real speed.
+	# full speed - a distinction a fixed angle window cannot express. Anything under the limit is not
+	# "forgiven" either: _apply_ground_forces() still scrubs the lateral component off against grip.
 	var flat_v: Vector3 = flat_velocity
 	var land_axis: Vector3 = _board_axis()
 	var land_along: float = absf(flat_v.dot(land_axis))
 	last_landing_slide = (flat_v - land_axis * flat_v.dot(land_axis)).length()
-	# Arm the realignment budget with the sideways speed actually arrived with. Set HERE, where that
-	# speed is measured, and nowhere else - a second writer is exactly how it would start growing
-	# again, which is the failure the budget replaced.
+	# Arm the realignment budget with the sideways speed actually arrived with. SET HERE AND NOWHERE
+	# ELSE - a second writer is how it starts growing again, which is the failure the budget replaced.
 	#
-	# Bounded by the heading error the pacing can actually express - see max_realign_angle_deg. The
-	# budget only covers lateral that is a heading to be ROTATED into line, which needs an along-axis
-	# component to rotate toward; anything beyond that is a skid, and grip fights it at full strength.
-	# Landing with no forward speed at all now arms nothing, so a standing directional pop lands and
-	# stops instead of sliding.
+	# Bounded by the heading error the pacing can express - see max_realign_angle_deg. Landing with no
+	# forward speed arms nothing, so a standing directional pop lands and stops instead of sliding.
 	_landing_residual = minf(last_landing_slide,
 		land_along * tan(deg_to_rad(max_realign_angle_deg)))
 	if last_landing_slide > max_landing_slide:
@@ -1773,14 +1579,12 @@ func _apply_grounded_board_pitch(delta: float) -> void:
 	var target_pitch_deg: float = 0.0
 	var front: Vector2 = rider.front_stick()
 	var back: Vector2 = rider.back_stick()
-	# NOT named is_manualing: that is a method on this class, and a local of the same name shadowed it
-	# for the rest of the function. Nothing here wanted the method - the two ask different questions,
-	# and this one is "did an input just request a pitch", not "is the rider balanced on one truck".
+	# "Did an input just request a pitch", NOT is_manualing()'s "is the rider balanced on one truck".
 	var pitch_requested: bool = false
 
-	# Reads back the pitch this function itself wrote last frame, which is what makes the two-stage law
-	# below stateful without a second flag. `manual_pitch_min_deg` rather than a literal 2.0: it is the
-	# same threshold is_manualing() uses for the same question, and two copies of one angle is one edit
+	# Reads back the pitch this function itself wrote last frame, which makes the two-stage law below
+	# stateful without a second flag. `manual_pitch_min_deg` rather than a literal: it is the same
+	# threshold is_manualing() uses for the same question, and two copies of one angle is one edit
 	# away from the balance law and the authority damping disagreeing about what a manual is.
 	var was_manualing: bool = manual_timer >= manual_entry_delay \
 		or absf(board_pivot.rotation_degrees.x) > manual_pitch_min_deg

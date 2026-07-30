@@ -227,6 +227,13 @@
    - Judge outcomes and landability purely on state against geometry: `catch_cone_deg = min(atan(grip_friction), rail-strike angle)`, with extents measured via `SkateDeckMesh.deck_extents()`. Never read airtime, frame counts, or timer duration to gate trick success.
    - Scale multiple rotation axes onto one shared duration in `_impart_deck_rotation()` so roll and yaw retire on the exact same frame.
    - Never teleport decks flat at touchdown; integrate existing angular velocity via `_advance_flip_settle()` the short way round.
+10. **📝 Inline comments state CONSTRAINTS, not HISTORY.** This codebase is heavily commented on purpose — the physics is full of places where the ordinary approach is wrong for a skateboard, and that reasoning is worth its lines. But a comment earns its place by changing a *future* decision, not by recording a past one.
+    - **Belongs inline:** invariants and what breaks when they break; why the obvious approach is wrong *here*; load-bearing ordering ("must run above every bail branch", "step 5b before step 6"); couplings between tuned values (`flick_rate_min` cannot move without `jump_impulse` and `flip_speed_deg`); derivations you cannot re-read off the code; measured figures that justify a current constant; and explicit warnings (`MIND THE SIGN`, `MUST be > 0`, `set HERE and nowhere else`).
+    - **Belongs in the docs, not the code:** bug symptoms and how they were reported, probe measurements from an investigation, what the previous implementation did, and which task or session shipped a change. [BUG_ARCHIVE.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/BUG_ARCHIVE.md) and [CHANGELOG_LEDGER.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/CHANGELOG_LEDGER.md) already hold this. When you fix something, write the post-mortem **there** and leave a one-clause pointer in the code: `## Must stay ABOVE every bail branch: it sat below one once. BUG_ARCHIVE #8.`
+    - **Do not restate the line below**, and do not repeat a rationale already given elsewhere — state it once, cross-reference from the other sites. The same argument told in four places is four things to keep in sync.
+    - **`##` on an `@export` var is the Godot inspector tooltip.** Keep it to about **4 lines**; a 17-line tooltip is unusable in the editor. Genuinely load-bearing overflow goes in a `#` block comment beside the `@export_group`, or on the function that consumes the value — still adjacent, just out of the inspector.
+    - The ALL-CAPS emphasis convention works **because it is rare**. Do not add more of it.
+    - **A stale comment is worse than none.** Three were found describing code that no longer existed. If you change behaviour, re-read the comments around it.
 
 ---
 

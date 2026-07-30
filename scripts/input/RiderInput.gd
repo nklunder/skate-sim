@@ -9,15 +9,13 @@ extends Node
 ## parents first). That ordering is the whole reason for the parent/child relationship rather than
 ## two siblings - the gesture recogniser must never read a half-updated stick.
 ##
-## This half was split out of the old FootInputState, which had grown into three things at once: an
-## input reader, a trick state machine, and a scratchpad SkaterController wrote back into from six
-## places. Splitting it means the foot-animation work can add crouch and flick state to TrickState
-## without enlarging the thing that answers "where is the left stick".
+## Keeping it this narrow is what lets trick work add crouch and flick state to TrickState without
+## enlarging the thing that answers "where is the left stick".
 
 enum Stance { REGULAR, GOOFY }
-## Which physical foot. Was a String tested with begins_with("Left") in ~24 places, which is the same
-## failure shape as the trick-name strings removed from this project: a typo compiles cleanly and
-## fails silently. Strings now exist only at the HUD boundary, via foot_name().
+## Which physical foot. An enum, not a String: a name tested with begins_with("Left") has the same
+## failure shape as the trick-name strings removed from this project - a typo compiles cleanly and
+## fails silently. Strings exist only at the HUD boundary, via foot_name().
 enum Foot { LEFT, RIGHT }
 ## Which end of the deck a foot is over. An attribute of the BOARD - see update_stance_facts().
 enum DeckEnd { NOSE, TAIL }
@@ -122,16 +120,14 @@ func _classify_push_strokes() -> void:
 
 ## Resolves the two facts that depend on where the rider's feet sit relative to the deck.
 ##
-## Both are derived from the shoes' REST OFFSETS, never from their live positions. Foot placement is
-## a property of how the rider stands on the board, not of what an animation is doing this instant,
-## and reading the live nodes coupled the single most load-bearing fact in the input system
-## (`leading_foot` drives pop classification, every pitch sign, front_stick()/back_stick(), push type
-## and the kickturn axle) to a node documented as presentation-only. It also forced FootRig to honour
-## a hand-maintained "the leading foot must never cross Z = 0" invariant on every animation ever
-## written. Rests are constants captured from SkaterRig.tscn, so that whole class of coupling is gone.
+## Both are derived from the shoes' REST OFFSETS, never their live positions. `leading_foot` is the
+## most load-bearing fact in the input system - it drives pop classification, every pitch sign,
+## front_stick()/back_stick(), push type and the kickturn axle - so sourcing it from live nodes would
+## couple all of that to a rig documented as presentation-only, and would force FootRig to honour a
+## hand-maintained "the leading foot must never cross Z = 0" invariant on every animation.
 ##
-## `root` is the yaw-carrying SkaterRoot. It is passed explicitly rather than reached via
-## pivot.get_parent(), which now resolves to the surface-tilted SurfaceAlign node and would skew the
+## `root` is the yaw-carrying SkaterRoot, passed explicitly rather than reached via
+## pivot.get_parent() - that resolves to the surface-tilted SurfaceAlign node and would skew the
 ## stationary forward vector on any ramp.
 ##
 ## `deck_reversed` is whether the DECK ITSELF is currently turned 180 deg from its resting
@@ -161,13 +157,12 @@ func update_stance_facts(pivot: Node3D, left_rest: Vector3, right_rest: Vector3,
 	# world space by the pivot's basis, which is exactly what (foot.global_position -
 	# pivot.global_position) evaluated to back when the live nodes were read.
 	#
-	# Taken from `travel_axis_sign` - which way along the ROLLING AXIS the rider is going - and never
+	# Taken from `travel_axis_sign` - which way along the ROLLING AXIS the rider is going - and NEVER
 	# from the raw velocity vector. The feet are mounted fore and aft, so a travel direction with a
-	# large sideways component dots to nearly zero against both of them and the comparison below is
-	# decided by noise. A standing directional pop is exactly that: over 1 m/s straight sideways.
-	# leading_foot would flip mid-flight, and since it picks the kickturn axle the board came down
-	# pivoting on the wrong truck. The sign already holds through low speed, so it is also the right
-	# answer when stopped.
+	# large sideways component dots to nearly zero against both and the comparison below is decided by
+	# noise. A standing directional pop is exactly that, at over 1 m/s straight sideways, and
+	# leading_foot flipping mid-flight lands the board pivoting on the wrong truck. The sign also
+	# holds through low speed, so it is the right answer when stopped.
 	var forward_source: Node3D = root if root != null else pivot.get_parent()
 	var travel_dir: Vector3 = -forward_source.global_transform.basis.z * travel_axis_sign
 	var basis: Basis = pivot.global_transform.basis

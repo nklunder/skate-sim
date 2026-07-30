@@ -6,10 +6,9 @@ extends RefCounted
 ## "what is ahead of this point", and "is there an edge near this point"; deciding what to DO with
 ## those answers belongs to the caller.
 ##
-## Uses direct space state queries rather than RayCast3D nodes deliberately: the rig's raycasts were
-## children of BoardPivot, so they tilted with trick pitch (22 deg on every pop) and probed sideways
-## exactly when landing accuracy mattered most. Explicit world-space from/to keeps probe direction
-## true regardless of how the board is rotated.
+## Direct space state queries rather than RayCast3D nodes, deliberately: a raycast parented under
+## BoardPivot tilts with trick pitch - 22 deg on every pop - and probes sideways exactly when landing
+## accuracy matters most. Explicit world-space from/to keeps probe direction true at any board angle.
 
 ## A single surface hit. `valid` is false when the ray reached nothing.
 class Hit extends RefCounted:

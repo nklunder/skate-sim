@@ -21,11 +21,10 @@ var flick_tilt_deg: float = 0.0 # Pitch tilt imparted by flick angle (- = boned,
 ## The one measurement that separates a lazy flip from an explosive one: both end with the stick in
 ## the same place, so no reading of stick POSITION can tell them apart.
 ##
-## Measured but not yet consumed - nothing reads it today. It is recorded here rather than computed
-## where it is used because two separate systems are meant to scale off it, and off the SAME number:
-## how fast the shoe whips through its flick arc, and (later) how fast the deck rotates. Sharing one
-## measurement is what keeps the shoe clearing the deck at every intensity, instead of needing a
-## separately calibrated floor speed on each.
+## Recorded here rather than computed where it is used because two systems scale off it and must use
+## the SAME number: the deck's rotation rate (SkaterController._flick_rate_scale) and, later, how
+## fast the shoe whips through its flick arc. One shared measurement is what keeps the shoe clearing
+## the deck at every intensity instead of needing a separately calibrated floor speed on each.
 var flick_speed: float = 0.0
 
 # --- Derived -----------------------------------------------------------------

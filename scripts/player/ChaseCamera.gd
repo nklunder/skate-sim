@@ -3,34 +3,25 @@ extends Node3D
 
 ## Chase camera: a spring arm orbiting the skater.
 ##
-## Lives on the CameraPivot node, which is a child of SkaterRoot but deliberately NOT of BoardPivot
-## or SurfaceAlign, so the view never rolls with a ramp or spins with a trick.
+## Lives on the CameraPivot node, a child of SkaterRoot but deliberately NOT of BoardPivot or
+## SurfaceAlign, so the view never rolls with a ramp or spins with a trick.
 ##
-## THE INVARIANT: position and aim must come from the SAME smoothed yaw. Break it and the subject
-## leaves the frame. It was broken once, and the failure is worth recording because it did not look
-## like a framing bug - it read as "the pan is too slow". CameraPivot used to CARRY the boom offset,
-## so it sat 2.1 m behind the skater and rotating it spun the camera on the spot, like turning your
-## head while standing still. Rig yaw was inherited rigidly, so on an imperfect landing the camera's
-## POSITION whipped round instantly while only its AIM was smoothed. Measured on a 70 deg landing:
-## the skater sat 60.8 deg off the centre of view - outside the frame entirely - and took 1.2 s to
-## come back. The boom now lives on Camera3D and this node orbits the rig origin, so rotating it
-## walks the camera AROUND the skater while it keeps facing them.
+## THE INVARIANT: position and aim must come from the SAME smoothed yaw, or the subject leaves the
+## frame. The boom therefore lives on Camera3D and this node orbits the rig origin, so rotating it
+## walks the camera AROUND the skater while it keeps facing them. Put the boom offset back on this
+## node and rotating it spins the camera on the spot instead - which reads as "the pan is too slow",
+## not as a framing bug, so it is worth knowing where to look.
 ##
 ## The camera chases the DIRECTION OF TRAVEL, not the board's heading. Roll up a bank and back down
-## and gravity reverses your travel without touching rig yaw, so a board-following camera simply sat
-## there watching you come at it. Travel-following also gets fakie right for nothing: land a 180 and
-## your travel is unchanged, so the shot correctly does not move even though the board reversed.
+## and gravity reverses your travel without touching rig yaw, so a board-following camera just sits
+## there watching you come at it. Travel-following gets fakie right for free too: land a 180 and your
+## travel is unchanged, so the shot correctly does not move even though the board reversed. It is
+## also why no jump-absorbing machinery is needed here - board heading jumps at touchdown, travel
+## does not.
 ##
-## It also DELETED machinery rather than adding it. Board heading jumps at touchdown (the landing
-## residual is transferred into rig yaw), which is the sole reason a spring-damped "jump offset"
-## existed to absorb and return those jumps. Travel direction never jumps - it realigns at a bounded
-## rate through wheel grip - so the workaround is gone along with its cause.
-##
-## Driven by an explicit follow() call from SkaterController's frame pipeline rather than by its own
-## _physics_process. That is the whole reason it can be extracted safely: the camera MUST run after
-## position integration, and a self-driven _physics_process would make that ordering a property of
-## node order in SkaterRig.tscn - invisible from the code, and a one-frame lag the moment anyone
-## reorders the scene tree.
+## Driven by an explicit follow() call from SkaterController's frame pipeline, never its own
+## _physics_process: the camera MUST run after position integration, and self-driving would make that
+## ordering a property of node order in SkaterRig.tscn rather than something visible in the code.
 
 ## How tightly the chase camera converges on the yaw it is heading for.
 ##
@@ -42,30 +33,23 @@ extends Node3D
 ## enough that ground turns do not feel boaty was far too fast for a half-turn reversal, and slow
 ## enough to pace the reversal made every turn feel like steering a barge.
 @export var camera_follow_speed: float = 25.0
-## Fastest the camera may swing around the skater, in degrees per second.
-##
-## Set comfortably above the ~172 deg/s the board can yaw under full lean, so ordinary steering
-## passes through untouched and only genuine REORIENTATIONS are paced - chiefly reversing down a
-## bank, which asks the camera for most of a half-turn at once.
-##
-## This replaced a spring-damped "jump offset" that absorbed landing residuals and handed them back.
-## That machinery existed solely because the camera tracked the BOARD's heading, which jumps at
-## touchdown. Tracking travel removed the jumps, so the workaround went with them.
+## Fastest the camera may swing around the skater, in degrees per second. Set comfortably above the
+## ~172 deg/s the board can yaw under full lean, so ordinary steering passes through untouched and
+## only genuine REORIENTATIONS are paced - chiefly reversing down a bank, which asks for most of a
+## half-turn at once.
 @export var camera_max_swing_deg: float = 220.0
 ## ORBIT component of the side view: how far around the skater the camera swings, in degrees.
 ##
-## Kept small on purpose. Orbiting rotates the camera's AIM, so the direction of travel stops
-## pointing at the centre of the screen and the world streams diagonally - on a wide FOV the
-## asymmetric perspective stretch reads as genuine distortion, not just an angle. The visible part of
-## the side view is camera_side_offset_m instead, which shifts the viewpoint without turning it.
+## Kept small on purpose. Orbiting rotates the camera's AIM, so travel stops pointing at the centre
+## of the screen and the world streams diagonally - on a wide FOV that asymmetric stretch reads as
+## distortion. The visible part of the side view is camera_side_offset_m, which shifts the viewpoint
+## without turning it.
 ##
-## What this still does, and why it must not be zero: it is the entire tie-break for a travel
-## reversal. Anchored to the rig's lateral axis, so the rider's sides do not move when gravity turns
-## them round - the camera must therefore cross to the other side RELATIVE TO TRAVEL, and the swing
-## becomes 180 - 2x this one way against 180 + 2x the other. Ordinary shortest-path smoothing then
-## picks the direction on its own. At 0 a dead-straight reversal is a true coin-flip, and would need
-## a stored swing sign or some other rule invented for it. Even a few degrees is a decisive margin -
-## the difference is real, not floating-point noise.
+## MUST NOT BE ZERO: it is the entire tie-break for a travel reversal. Anchored to the rig's lateral
+## axis, so the rider's sides do not move when gravity turns them round; the camera must cross to the
+## other side RELATIVE TO TRAVEL, making the swing 180 - 2x one way against 180 + 2x the other, and
+## shortest-path smoothing then picks a direction on its own. At 0 a dead-straight reversal is a
+## coin-flip needing a stored swing sign. Even a few degrees is a decisive margin.
 @export var camera_side_offset_deg: float = 2.5
 ## POSITIONAL component: how far the camera slides sideways, in metres. This is the part you see.
 ##
@@ -87,18 +71,15 @@ extends Node3D
 @export var camera_position_damp: float = 12.0
 
 ## Degrees of extra field of view at full speed, on top of whatever the camera was authored with.
-##
 ## Speed is felt largely through how fast texture streams past the edges of the frame, and a fixed
-## lens gives 2 m/s and 7 m/s the same peripheral flow - which is a large part of why riding read as
-## flat regardless of how good the physics underneath it was.
+## lens gives 2 m/s and 7 m/s the same peripheral flow.
 ##
-## Kept DELIBERATELY SUBTLE. Speed-scaled FOV is a racing-game convention, and the reference this sim
-## is chasing does not lean on it - Session sells speed through sound, a low camera and real pavement
-## texture, not through the lens. 07c ranks it third behind wheel rumble and optical flow for exactly
-## that reason. Wide enough to read as a swell at full speed, not as the world bending.
+## Kept DELIBERATELY SUBTLE - speed-scaled FOV is a racing-game convention, and the reference this
+## sim chases sells speed through sound, a low camera and pavement texture instead. Wide enough to
+## read as a swell at full speed, not as the world bending.
 ##
-## Set to 0.0 to disable entirely; the lens then never moves and nothing else changes, since no other
-## code reads it. Worth knowing for motion sensitivity too, which a swelling FOV can provoke.
+## Set to 0.0 to disable entirely: nothing else reads it, so the lens simply never moves. Worth
+## knowing for motion sensitivity, which a swelling FOV can provoke.
 @export var fov_gain_deg: float = 4.0
 ## Speed at which the full gain is reached, in m/s. Defaults to the rig's own max_push_speed, so the
 ## lens is wide open exactly when the rider is going as fast as pushing can carry them.
@@ -136,9 +117,8 @@ var _travel_heading: float = 0.0
 ## camera_position_damp.
 var _camera_pos: Vector3 = Vector3.ZERO
 ## Field of view the camera was authored with, captured in _ready() so the speed gain has a fixed
-## origin. Read from the scene rather than hardcoded, for the same reason _camera_boom_rest is: the
-## authored value is the one the framing was designed around, and duplicating it here would let the
-## two disagree the moment anyone adjusts the lens in the editor.
+## origin. Read from the scene rather than hardcoded, like _camera_boom_rest: duplicating the
+## authored value here would let the two disagree the moment anyone adjusts the lens in the editor.
 var _fov_rest: float = 75.0
 
 func _ready() -> void:
@@ -160,15 +140,13 @@ func follow(delta: float) -> void:
 	var velocity: Vector3 = skater.velocity
 
 	# Heading of travel, held below a threshold: the heading of a near-zero vector is noise, and that
-	# is exactly the state at the top of a bank in the instant before a reversal.
+	# is exactly the state at the top of a bank just before a reversal.
 	#
-	# Measured ALONG THE WHEELS, not on total speed. A heading is where the rider is being carried,
-	# and only motion along the rolling axis carries them anywhere they are pointed - sideways motion
-	# is a translation of a rider whose heading has not changed. A standing directional pop leaps
-	# bodily sideways at up to 1.5 m/s, which clears travel_min_speed outright: read as a heading, it
-	# swung the camera a full 90 deg mid-flight and then PARKED it there, because travel stops on
-	# landing and the last heading is held. The rider ended up filmed from the side having never
-	# turned. Total speed cannot tell that apart from real travel; the along-axis component can.
+	# Measured ALONG THE WHEELS, not on total speed. Only motion along the rolling axis carries the
+	# rider somewhere they are pointed; sideways motion is a translation of a rider whose heading has
+	# not changed. A standing directional pop leaps bodily sideways at up to 1.5 m/s, clearing
+	# travel_min_speed outright - read as a heading it swings the camera 90 deg mid-flight and PARKS
+	# it there, since travel stops on landing and the last heading is held.
 	#
 	# Costs the bank reversal nothing, which is the case this guard exists for: gravity reverses
 	# travel ALONG the axis, so the component tested here is exactly the one that flips sign.
@@ -210,14 +188,11 @@ func follow(delta: float) -> void:
 	# yaw. Solve for the local angle that lands it on the smoothed world yaw.
 	rotation.y = angle_difference(skater.rotation.y, _camera_yaw)
 
-	# Lateral slide, in this pivot's own frame - the visible half of the side view. Shifts the
-	# viewpoint without turning it, so the vanishing point stays centred and the skater sits
-	# off-centre instead of the world streaming diagonally.
+	# Lateral slide, in this pivot's own frame - the visible half of the side view.
 	#
 	# Projecting the side direction onto the pivot's local X gives a signed factor that is +/-1 in
-	# normal riding and eases through zero in the degenerate sideways case - the same continuity
-	# trick as the orbit term, avoiding a sign() that would flip on the boundary. Lerped rather than
-	# snapped so switching sides on the d-pad slides across instead of teleporting.
+	# normal riding and eases through zero in the degenerate sideways case - the same continuity trick
+	# as the orbit term, avoiding a sign() that would flip on the boundary.
 	var pivot_x := Vector2(cos(_camera_yaw), -sin(_camera_yaw))
 	var lateral_target: float = camera_side_offset_m * _camera_side_smooth * perp_dir.dot(pivot_x)
 	_camera_lateral = lerpf(_camera_lateral, lateral_target, minf(camera_follow_speed * delta, 1.0))
@@ -230,9 +205,7 @@ func follow(delta: float) -> void:
 	global_position = _camera_pos
 
 	# Speed-scaled FOV. Touches the LENS ONLY - no yaw, no position, no aim - so it cannot disturb the
-	# invariant at the top of this file, structurally rather than by being small. ground_physics'
-	# off-centre assertion measures the angle between the camera's forward basis and the direction to
-	# the skater, which has no projection in it and so is blind to field of view either way.
+	# invariant at the top of this file, structurally rather than by being small.
 	#
 	# PLANAR speed on purpose. current_speed drops the vertical component, so a pop does not punch the
 	# lens open on every ollie and shut again on landing.

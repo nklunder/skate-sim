@@ -3,15 +3,13 @@ extends RefCounted
 
 ## Human-readable names for joypad buttons, for the debug HUD's button readout.
 ##
-## Purely a display concern, and it lives with the HUD for that reason. It used to run inside
-## FootInputState._poll_inputs(), which meant sixty-four Input queries and a string join every
-## physics tick to build a label - work the input system did not need and could not use, on the one
-## path where per-frame cost actually matters. Nothing in the input or physics systems has ever read
-## it; only DebugHUD did.
+## Purely a display concern, and it lives with the HUD for that reason. Keep it out of the input
+## path: scanning every button to build a label costs 64 Input queries and a string join per physics
+## tick, on the one path where per-frame cost matters. Only DebugHUD reads this.
 ##
-## Kept as a full table rather than generated from the enum because the whole point is the mapping
-## between Godot's index and the labels printed on real controllers - which is exactly what you are
-## looking up when remapping a button.
+## A full table rather than something generated from the enum, because the point IS the mapping
+## between Godot's index and the labels printed on real controllers - which is what you are looking
+## up when remapping a button.
 
 static func name_for(btn: int) -> String:
 	match btn:
