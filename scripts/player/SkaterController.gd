@@ -463,7 +463,17 @@ var last_landing_slide: float = 0.0
 ## _apply_push_impulse() for a directed drive and _kill_momentum() for a crash.
 var current_speed: float:
 	get:
-		return Vector2(velocity.x, velocity.z).length()
+		return flat_velocity.length()
+
+## Horizontal component of `velocity`, with y dropped. Computed, never stored, for the same reason
+## current_speed is: `velocity` already determines it completely.
+##
+## Worth having a name because "the horizontal part of the motion" is the quantity almost every
+## ground term actually means, and it was being rebuilt inline at six call sites - one of which
+## (`_apply_grounded_board_pitch`'s kickturn gate) had re-derived `current_speed` by hand.
+var flat_velocity: Vector3:
+	get:
+		return Vector3(velocity.x, 0.0, velocity.z)
 
 ## LIVE sideways speed across the wheels' rolling axis - the quantity grip is actively scrubbing off
 ## right now. Computed, never stored, for the same reason `current_speed` is: `velocity` plus the rig
@@ -474,7 +484,7 @@ var current_speed: float:
 ## the snapshot is meant to persist, and the live value decays to zero within about half a second.
 var lateral_speed: float:
 	get:
-		var flat := Vector3(velocity.x, 0.0, velocity.z)
+		var flat: Vector3 = flat_velocity
 		var axis: Vector3 = _board_axis()
 		return (flat - axis * flat.dot(axis)).length()
 
@@ -963,7 +973,7 @@ func _update_travel_axis_sign() -> void:
 	# leading_foot, which fed the kickturn axle, and the board pivoted on the wrong truck after
 	# landing. Same mistake the chase camera made with its heading, in a second consumer.
 	var axis: Vector3 = _board_axis()
-	var along: float = Vector3(velocity.x, 0.0, velocity.z).dot(axis)
+	var along: float = flat_velocity.dot(axis)
 	if absf(along) > travel_min_speed:
 		_travel_axis_sign = 1.0 if along >= 0.0 else -1.0
 
@@ -1020,7 +1030,7 @@ func _apply_steering(delta: float) -> void:
 		_steer_rate = 0.0
 		return
 
-	var speed: float = Vector3(velocity.x, 0.0, velocity.z).length()
+	var speed: float = current_speed
 	var leaning: bool = absf(rider.lean) > 0.05
 	# Latch continuous carving if initiated above kickturn threshold, remaining in carve mode down to
 	# near-stall (< 0.05 m/s). Only re-evaluated while the rider is actually leaning: once they let
@@ -1101,6 +1111,20 @@ func _execute_pop() -> void:
 	# The knees come up as hard as the pop was. Nothing emerges a tuck - it is a muscle - so this is
 	# the one place effort is authored, and it is an impulse rather than a path.
 	rider_body.tuck(trick.pop_impulse_scale)
+
+	# ANGULAR MOMENTUM CROSSES THE TAKEOFF. Leaving the ground removes the TORQUE on the rider, not
+	# their rotation - so a rider popping mid-carve keeps turning, and the carve becomes the spin.
+	#
+	# Without this the ground rate was dropped to zero on the pop frame while airborne spin started
+	# again from zero, so every takeoff out of a turn had a yaw-rate step of up to ~134 deg/s in it
+	# (full lean at 7 m/s). That is the same missing term 07b found on the deck's own rotation, in the
+	# one rotation nobody had checked: the deck accelerates, the body did not.
+	#
+	# Assigned rather than added because the shoulders are provably at rest here - advance_spin() only
+	# runs airborne, and halt_spin() zeroes it at every touchdown. `_steer_rate` is still the live
+	# grounded rate: _apply_steering() drops it on the first AIRBORNE frame, which is the next one.
+	# Both sides apply yaw as minus-rate, so the sense carries across unchanged; only the unit differs.
+	rider_body.spin_rate_deg = rad_to_deg(_steer_rate)
 
 	if absf(trick.pop_lateral_impulse_ratio) > 0.0:
 		var lateral_axis: Vector3 = global_transform.basis.x * _travel_axis_sign
@@ -1282,7 +1306,7 @@ func _integrate_flight(delta: float) -> void:
 ## rebuilt from orientation here - that rebuild was the whole bug. Only the horizontal components
 ## move the skater; while grounded the surface snap at the end owns height entirely.
 func _integrate_position(delta: float) -> void:
-	var travel: Vector3 = Vector3(velocity.x, 0.0, velocity.z) * delta
+	var travel: Vector3 = flat_velocity * delta
 	if _blocked_by_wall(travel):
 		# Scales rather than zeroing so wall_stop_damping keeps meaning "fraction of speed retained".
 		velocity.x *= wall_stop_damping
@@ -1572,6 +1596,63 @@ func _finalise_trick_name() -> void:
 	trick.last_combo_string = TrickNames.resolve(sig)
 	trick.last_trick_signature = sig.describe()
 
+## Parks the rider and board frames back onto a resting orientation and hands the remainder to the
+## rig. Runs on EVERY touchdown, before anything judges what the landing was.
+##
+## THE INVARIANT: on any grounded frame, `board_pivot.rotation_degrees.y` is a multiple of 180.
+##
+## That is what makes the rig's heading and the deck's visible heading the same line, and the whole
+## sim leans on it. `_board_axis()` reads the RIG - so pushes, wheel grip, rolling friction, steering
+## and the lateral wash-out test all use the rig's forward as "where the wheels point". BoardPivot is
+## what the player actually sees. While the invariant holds, those agree; the moment it does not,
+## the physics is gripping along one axis while the board is drawn along another.
+##
+## IT USED TO BE SKIPPABLE, and that was a real bug. This block sat BELOW the primo / incomplete-flip
+## bail, which returns early - so bailing a flip while the body was mid-rotation left BoardPivot
+## holding the whole raw accumulated yaw and never told the rig. Measured on a probe: rig heading
+## 0.00 deg against a visible deck at -129.08 deg, with `board_pivot.rotation_degrees.y` sitting at
+## -849.08. Nothing grounded writes that field, so the disagreement then persisted until the next
+## SUCCESSFUL landing - across further pops included.
+##
+## What it felt like, and why it reads as ice rather than as a rotation bug: a kick drives along the
+## rig axis, `lateral_speed` is measured against the rig axis, so the push registered as pure
+## along-axis motion and grip found NOTHING to scrub - `lateral_speed` read 0.000 while the board
+## visibly slid 50.9 deg across its own wheels. Full grip, zero resistance, because both sides of the
+## test were wrong in the same direction. Only reproducible when a flip bailed AND the body was
+## turning, which is why it came and went.
+##
+## Land on the heading actually ACHIEVED, rather than snapping to a perfect 0/180: the residual is
+## transferred to the rig instead of being discarded. BoardPivot keeps only the 0/180 switch-stance
+## flip that every `cos(board_pivot.rotation_degrees.y)` test downstream depends on, while the rig
+## genuinely points where the rider landed. Land a 180 at 185 deg and you ride away 5 deg off your
+## old line and have to steer out of it; the error does not silently vanish.
+##
+## The trick NAME is unaffected: _finalise_trick_name() already rounds body yaw to half-turns, so
+## 185 deg still reads as a 180. Naming quantises, physics does not.
+##
+## Note the residual handed to the rig is bounded to +/-90 deg by the rounding, which is what keeps
+## `_travel_axis_sign` valid across the transfer without needing to be re-derived: the old travel
+## direction dots the new axis with cos(residual) >= 0, so its SIGN cannot flip.
+##
+## On a tilted surface the rig and pivot yaws are separated by SurfaceAlign's pitch and roll, so the
+## transfer is exact only on flat ground. At plausible landing residuals and ramp angles the error
+## stays well under a degree - not worth carrying a quaternion for.
+##
+## Nothing is handed to the camera here. It tracks the direction of TRAVEL, which does not jump at
+## touchdown - only the rig's heading does - so there is no discontinuity to absorb.
+func _reconcile_landing_frames() -> void:
+	var rest_yaw: float = _nearest_multiple(board_pivot.rotation_degrees.y, 180.0)
+	rotate_y(deg_to_rad(board_pivot.rotation_degrees.y - rest_yaw))
+	board_pivot.rotation_degrees.y = fmod(rest_yaw, 360.0)
+	# The rider's frame is resolved the same way and at the same instant. Only the REMAINDER went to
+	# the rig above, so the shoulders keep the half-turn that makes the rider switch - but they must
+	# not keep the whole spin, or every trick ever landed accumulates into the torso for good.
+	# Rounded independently rather than copied from the board: the two differ by the deck's own
+	# lateral pop yaw (up to lateral_pop_yaw_deg), which is the board kicking out, not the rider
+	# turning, and it must not leak into the rider's frame.
+	rider_body.rotation_degrees.y = fmod(
+		_nearest_multiple(rider_body.rotation_degrees.y, 180.0), 360.0)
+
 func _evaluate_touchdown_landing() -> void:
 	# Firmly seat shoes onto deck rest coordinates immediately upon ground contact. An EVENT, which
 	# is why it stays an explicit call here rather than becoming a state the solver infers: the
@@ -1583,6 +1664,11 @@ func _evaluate_touchdown_landing() -> void:
 	# stay on the deck. Zeroed before the catch judgement below, which reads roll and yaw only.
 	_wobble_amp = 0.0
 	board_mesh.rotation_degrees.x = 0.0
+
+	# THE FRAMES ARE RECONCILED ON CONTACT, BEFORE ANYTHING JUDGES THE LANDING. Arriving on the
+	# ground and deciding what the landing was CALLED are different questions, and only the first one
+	# is unconditional - see _reconcile_landing_frames() for what happened when a bail could skip it.
+	_reconcile_landing_frames()
 
 	# Primo / Incomplete Flip Check.
 	#
@@ -1623,40 +1709,13 @@ func _evaluate_touchdown_landing() -> void:
 		velocity.z *= cos(deg_to_rad(catch_err))
 		_credit_achieved_rotation()
 
-	# Land on the heading actually achieved, instead of snapping to a perfect 0/180.
-	#
-	# The residual is TRANSFERRED to the rig yaw rather than discarded. board_pivot keeps only the
-	# 0/180 switch-stance flip that every `cos(board_pivot.rotation_degrees.y)` test downstream
-	# depends on, while the rig - which is what _board_axis() reads, what steering turns and what the
-	# camera follows - genuinely points where the rider landed. Land a 180 at 185 deg and you ride
-	# away 5 deg off your old line and have to steer out of it; the error does not silently vanish.
-	#
-	# The trick NAME is unaffected: _finalise_trick_name() already rounds body yaw to half-turns, so
-	# 185 deg still reads as a 180. Naming quantises, physics does not.
-	#
-	# On a tilted surface the rig and pivot yaws are separated by SurfaceAlign's pitch and roll, so
-	# this transfer is exact only on flat ground. At plausible landing residuals and ramp angles the
-	# error stays well under a degree - not worth carrying a quaternion for.
-	var rest_yaw: float = _nearest_multiple(board_pivot.rotation_degrees.y, 180.0)
-	rotate_y(deg_to_rad(board_pivot.rotation_degrees.y - rest_yaw))
-	board_pivot.rotation_degrees.y = fmod(rest_yaw, 360.0)
-	# The rider's frame is resolved the same way and at the same instant. Only the REMAINDER went to
-	# the rig above, so the shoulders keep the half-turn that makes the rider switch - but they must
-	# not keep the whole spin, or every trick ever landed accumulates into the torso for good.
-	# Rounded independently rather than copied from the board: the two differ by the deck's own
-	# lateral pop yaw (up to lateral_pop_yaw_deg), which is the board kicking out, not the rider
-	# turning, and it must not leak into the rider's frame.
-	rider_body.rotation_degrees.y = fmod(
-		_nearest_multiple(rider_body.rotation_degrees.y, 180.0), 360.0)
-	# Nothing is handed to the camera here any more. It tracks the direction of TRAVEL, which does
-	# not jump at touchdown - only the rig's heading does - so there is no discontinuity to absorb.
 
 	# Sideways landing, judged on MOMENTUM rather than angle. Wheels hold only so much lateral speed
 	# before washing out, so the identical 90 deg landing is survivable at walking pace and fatal at
 	# full speed - a distinction the old fixed 45-135 deg window could not express at all. Anything
 	# under the limit is not "forgiven" either: the lateral component is still scrubbed off against
 	# grip by _apply_ground_forces(), so a sketchy landing costs real speed.
-	var flat_v := Vector3(velocity.x, 0.0, velocity.z)
+	var flat_v: Vector3 = flat_velocity
 	var land_axis: Vector3 = _board_axis()
 	var land_along: float = absf(flat_v.dot(land_axis))
 	last_landing_slide = (flat_v - land_axis * flat_v.dot(land_axis)).length()
@@ -1714,9 +1773,17 @@ func _apply_grounded_board_pitch(delta: float) -> void:
 	var target_pitch_deg: float = 0.0
 	var front: Vector2 = rider.front_stick()
 	var back: Vector2 = rider.back_stick()
-	var is_manualing: bool = false
+	# NOT named is_manualing: that is a method on this class, and a local of the same name shadowed it
+	# for the rest of the function. Nothing here wanted the method - the two ask different questions,
+	# and this one is "did an input just request a pitch", not "is the rider balanced on one truck".
+	var pitch_requested: bool = false
 
-	var was_manualing: bool = manual_timer >= manual_entry_delay or abs(board_pivot.rotation_degrees.x) > 2.0
+	# Reads back the pitch this function itself wrote last frame, which is what makes the two-stage law
+	# below stateful without a second flag. `manual_pitch_min_deg` rather than a literal 2.0: it is the
+	# same threshold is_manualing() uses for the same question, and two copies of one angle is one edit
+	# away from the balance law and the authority damping disagreeing about what a manual is.
+	var was_manualing: bool = manual_timer >= manual_entry_delay \
+		or absf(board_pivot.rotation_degrees.x) > manual_pitch_min_deg
 
 	# The two-stage balance law - entering a manual from four wheels demands more than holding one
 	# already established. Both stages live on TrickState so this and the touchdown check cannot
@@ -1725,13 +1792,14 @@ func _apply_grounded_board_pitch(delta: float) -> void:
 	var nose_down: bool = trick.holds_nose_balance() if was_manualing else trick.enters_nose_balance()
 	if tail_down:
 		target_pitch_deg = minf(1.0, back.length()) * max_pitch_deg
-		is_manualing = true
+		pitch_requested = true
 	elif nose_down:
 		target_pitch_deg = -minf(1.0, front.length()) * max_pitch_deg
-		is_manualing = true
-		
+		pitch_requested = true
+
 	# Automatically lift front trucks during Stationary Kickturns ONLY if not already balancing a thumbstick manual!
-	if not is_manualing and not _is_carve_latched and abs(rider.lean) > 0.05 and Vector3(velocity.x, 0.0, velocity.z).length() < kickturn_max_speed:
+	if not pitch_requested and not _is_carve_latched and absf(rider.lean) > 0.05 \
+			and current_speed < kickturn_max_speed:
 		target_pitch_deg = kickturn_pitch_deg
 		manual_timer = manual_entry_delay
 		

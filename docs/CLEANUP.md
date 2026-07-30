@@ -68,6 +68,27 @@ A plain componentwise `Vector3` subtraction with no `angle_difference()`. Harmle
 
 ---
 
+## 🔨 9. Four structural findings from the 07d physics audit
+
+`res://scripts/player/SkaterController.gd`, `res://scripts/player/RiderBody.gd`
+
+Full write-ups, measurements and "done looks like" for each live in
+**[07d_CONTROL_CONTINUITY.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07d_CONTROL_CONTINUITY.md) items 3–7** — not duplicated here. In short, and in priority order:
+
+| | Finding | Shape |
+|---|---|---|
+| **3** | ~17 `lerpf(x, target, rate*delta)` lags stand in for inertia. A first-order lag has no momentum and responds *hardest on frame one* — a fast bite then a vague tail. Real inertia is bounded angular **acceleration** (`move_toward`). Also `rate*delta` is not frame-rate independent (latent at a fixed $60\text{ Hz}$). | Feel change; needs playing. **Do `_steer_rate` alone, first.** |
+| **4** | `_is_carve_latched` hides a ~176× jump in target turn rate as it clears at low speed. Deleting the latch and **summing** the carve and kickturn terms removes the regime switch; the axle anchoring is the hard part. | Reduction + re-baseline |
+| **5** | Two vertical systems, neither a contact: a rigid per-frame `global_position.y` snap (zero lag) against an orientation lerp at $12/s$ (~5 frames), plus a cosmetic `landing_dip`. One spring-damper replaces both. | Net new physics |
+| **6** | The deck's rotation has five overlapping modes (~250 lines). `flip_catch_floor` and two independent decelerators both hint the model fights itself. **Earned complexity — do not attempt as a cleanup.** | Rewrite, own spec |
+| **7** | Reinforces #3 below: the one-frame input lag is a *feel* bug, and it already leaks a real 2-frame rotation budget into `flip_unwind_max_deg`. | Reduction + re-baseline |
+
+**Why left:** each needs either a play verdict or its own commit with its own re-baseline, and bundling
+them would have hidden whether the two changes that *did* ship (07d items 1–2) did anything. **Not a
+queue to burn down** — item 6 in particular is filed as a warning, not a task.
+
+---
+
 ## 🕳️ 8. `RiderBody.twist_deg` has no regression coverage yet
 
 `res://scripts/player/RiderBody.gd`
@@ -115,5 +136,8 @@ Kept briefly so a returning agent can see these are **already done** and does no
 - `FootRig` test coverage — written alongside the first physics-driven foot motion, as the entry said it should be (`tests/foot_rig.tscn`, 12 cases across `{regular, goofy} × {forward, switch}`)
 - **#9 Grounded turning has no speed term** → carving is now $\omega = v/R$ off `carve_radius_m` (`2aa9b53`, [07a](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07a_CARVE_CURVATURE.md)). The kickturn kept a flat rate of its own, deliberately
 - **#10 The deck's rotation starts and stops in a single frame** → spin-up and catch ramps plus precession wobble (`39f6ced`, [07b](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07b_ROTATION_DYNAMICS.md)). Item 4 of that plan, imperfect sync, is still open
+- **A power curve on `lean` lived in `StickPoller`**, rescaling the carve model's only input — half a trigger drew a $13.8\text{ m}$ arc against a $6\text{ m}$ model. Now linear ([07d](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07d_CONTROL_CONTINUITY.md) item 1)
+- **Angular momentum was discarded at every takeoff** → `_execute_pop()` seeds `spin_rate_deg` from the live `_steer_rate` ([07d](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07d_CONTROL_CONTINUITY.md) item 2). The **landing** side is still a hard stop, deliberately
+- Six inline `Vector3(velocity.x, 0.0, velocity.z)` rebuilds → `flat_velocity`; a local `is_manualing` shadowing the method of the same name, and a `2.0` literal duplicating `manual_pitch_min_deg`
 
 ---

@@ -16,6 +16,7 @@ This directory serves as the centralized technical engineering reference for pla
 | 07a | ↳ Carve Curvature | [07a_CARVE_CURVATURE.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07a_CARVE_CURVATURE.md) | 🚧 `PLANNED` | Turning has no speed term — $\omega = v/R$. Diagnostic as much as a fix; **do this one first**. |
 | 07b | ↳ Rotation Dynamics | [07b_ROTATION_DYNAMICS.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07b_ROTATION_DYNAMICS.md) | 🚧 `PLANNED` | The deck starts and stops spinning in one frame. Spin-up, spin-down, and precession wobble. |
 | 07c | ↳ Presentation Feel | [07c_PRESENTATION_FEEL.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07c_PRESENTATION_FEEL.md) | 🚧 `PLANNED` | Wheel rumble, optical flow, speed FOV. Probably a large part of the answer — deliberately ordered last so it cannot mask 07a. |
+| 07d | ↳ Control Continuity | [07d_CONTROL_CONTINUITY.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07d_CONTROL_CONTINUITY.md) | ✅ `IMPLEMENTED` (1–2) | Physics audit. A power curve in the device layer was rescaling the carve model's only input; angular momentum was discarded at every takeoff. Items 3–6 filed, not done. |
 | **03** | **Sound Design Engine** | [03_SOUND_DESIGN.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/03_SOUND_DESIGN.md) | 🚧 `PLANNED` | Procedural audio: speed-scaled polyurethane wheel rumble, maple tail cracks, and griptape catch thuds. |
 
 ---

@@ -40,6 +40,10 @@ var _last_full_roll_step: float = 0.0
 ## once grounded, so anything surviving the landing is a permanent tilt on the deck.
 var _peak_wobble: float = 0.0
 var _wobble_at_land: float = 0.0
+## BoardPivot's yaw on the first grounded frame. THE FRAME INVARIANT: it must be a multiple of 180,
+## because that is what keeps the rig's heading - which `_board_axis()` reads for pushes, grip,
+## friction and steering - on the same line as the deck the player can see.
+var _pivot_yaw_at_land: float = 0.0
 ## Last airborne frame on which each axis actually moved. Sampling "has it reached its target" from
 ## outside cannot work: the catch clears the flags and fmods the angles during the controller's own
 ## tick, so the finishing frame is never visible here. When each axis STOPPED turning is observable,
@@ -181,6 +185,26 @@ const CASES := [
 		"flip": true, "scoop": 0, "hold_flick": 46, "after_flick": Vector2(0.0, 0.7),
 		"max_reversed": 50.0,
 		"jump": 16.0, "expect_turns": 2},
+	# THE FRAME RECONCILIATION. Bail a flip WHILE THE BODY IS TURNING - the one combination that used
+	# to skip it, because the primo branch returned before the transfer ran.
+	#
+	# What it left behind: BoardPivot holding the whole raw accumulated body yaw (measured -849.08 deg)
+	# while the rig, which is what `_board_axis()` reads, never heard about it. Rig heading 0.00 deg
+	# against a visible deck at -129.08. Nothing grounded writes BoardPivot's yaw, so it persisted
+	# until the next SUCCESSFUL landing, across further pops included.
+	#
+	# It presented as ICE rather than as a rotation bug, and that is worth stating because it is why
+	# it went unnoticed: a kick drives along the rig axis and `lateral_speed` is measured against the
+	# rig axis, so the push read as pure along-axis motion and grip found nothing to scrub -
+	# `lateral_speed` 0.000 while the board visibly slid 50.9 deg across its own wheels. Both sides of
+	# the test were wrong in the same direction, so full grip produced zero resistance.
+	#
+	# `body_lean` holds a trigger through the flight; `flip_speed` 120 is far too slow to bring the
+	# deck round inside the hang time, so the catch error clears the cone and the primo branch fires.
+	# The assertion itself is on EVERY case, not just this one - see _finish_case().
+	{"label": "bail a flip mid-body-spin", "pos": Vector3(4.0, 0.078, 14.0),
+		"flip": true, "scoop": 0, "flip_speed": 120.0, "jump": 16.0, "body_lean": 1.0,
+		"expect": "BAIL! (Primo Crash / Incomplete Flip)"},
 ]
 
 func _ready() -> void:
@@ -248,6 +272,10 @@ func _physics_process(_delta: float) -> void:
 	# This node sits above SkaterRig in tree order, so writing here lands before the controller reads.
 	if _popped and CASES[_case].get("hold_manual", false):
 		_skater.rider.right_stick_raw = Vector2(0.0, 0.60) # trailing stick, inside 0.20-0.90
+	# Trigger held through the flight: this is what accumulates BODY yaw, as distinct from the deck's
+	# own rotation. Airborne only, so it cannot steer the rig after touchdown and pollute the landing.
+	if _popped and CASES[_case].has("body_lean") and not _skater.is_grounded:
+		_skater.rider.lean = float(CASES[_case]["body_lean"])
 	# Hold the flick out for a while after the pop: each completion reached while it is still held
 	# buys another turn.
 	if _popped and _frame - _pop_frame < int(CASES[_case].get("hold_flick", 0)):
@@ -325,6 +353,10 @@ func _physics_process(_delta: float) -> void:
 		_speed = _skater.current_speed
 		_catch_err = _skater.last_catch_error_deg
 		_wobble_at_land = absf(_skater.board_mesh.rotation_degrees.x)
+		# Sampled on the FIRST grounded frame, which is the only frame that can show the failure:
+		# _reconcile_landing_frames() has just run (or, in the bug, has just been skipped), and
+		# nothing grounded writes this field afterwards either way.
+		_pivot_yaw_at_land = _skater.board_pivot.rotation_degrees.y
 
 	if _landed_frame >= 0 and _frame - _landed_frame >= 20:
 		_finish_case()
@@ -407,6 +439,18 @@ func _finish_case() -> void:
 			- SkaterController._nearest_multiple(_skater.board_mesh.rotation_degrees.z, 360.0))
 		if resting > 0.01:
 			problems.append("settled %.2f deg off resting orientation" % resting)
+
+	# THE FRAME INVARIANT, checked on EVERY case including the bails - which is the whole point, since
+	# the one path that broke it was a bail. BoardPivot's yaw must be a multiple of 180 on a grounded
+	# frame: the rig carries the world heading and BoardPivot carries only the 0/180 switch flip, so
+	# anything else means the physics is gripping along one axis while the board is drawn along
+	# another. See SkaterController._reconcile_landing_frames().
+	var pivot_off: float = absf(_pivot_yaw_at_land \
+		- SkaterController._nearest_multiple(_pivot_yaw_at_land, 180.0))
+	if pivot_off > 0.01:
+		problems.append(("BoardPivot landed %.2f deg off a resting yaw (at %.2f) - the rig and the "
+			+ "visible deck are on different axes, so grip and pushes act along a line the wheels "
+			+ "are not on") % [pivot_off, _pivot_yaw_at_land])
 
 	if not problems.is_empty():
 		_failures += 1

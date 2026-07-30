@@ -39,12 +39,19 @@ A fresh session should not spend time rediscovering these. They are settled and 
 |---|---|---|---|
 | **07a** ✅ | Carve curvature (`ω = v/R`) | [07a_CARVE_CURVATURE.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07a_CARVE_CURVATURE.md) | **Diagnostic as much as a fix.** Cheapest way to learn whether "flowy" is a physics gap or a presentation gap — **implemented, awaiting the play verdict** |
 | **07b** ✅ | Rotation dynamics (spin-up, spin-down, wobble) | [07b_ROTATION_DYNAMICS.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07b_ROTATION_DYNAMICS.md) | Biggest single win on "mechanical", and it is real physics rather than polish — **items 1–3 done; item 4 (imperfect sync) deliberately not** |
-| **07c** | Presentation (sound, optical flow, FOV) | [07c_PRESENTATION_FEEL.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07c_PRESENTATION_FEEL.md) | Probably a **large** part of the answer — but it would MASK 07a and 07b rather than fix them |
+| **07d** ✅ | Control continuity (linear lean, momentum across takeoff) | [07d_CONTROL_CONTINUITY.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07d_CONTROL_CONTINUITY.md) | **Audit finding, and it sits UPSTREAM of 07a.** A power curve in `StickPoller` was rescaling the only input to $\omega = v/R$, so half a trigger drew a $13.8\text{ m}$ arc where the model said $6$ — items 1–2 shipped, items 3–6 filed |
+| **07c** | Presentation (sound, optical flow, FOV) | [07c_PRESENTATION_FEEL.md](file:///Users/nicholasklunder/Projects/skate-sim-v-2/docs/features/07c_PRESENTATION_FEEL.md) | Probably a **large** part of the answer — but it would MASK 07a, 07b and 07d rather than fix them |
 
 **The ordering is the important part.** 07a first because it answers a question: if carving at
 $2\text{ m/s}$ suddenly feels right, the diagnosis is confirmed and 07b/07c are worth doing properly.
 If it still feels flat afterwards, the answer is mostly presentation, and that is worth knowing
 *before* spending more time tuning physics in pursuit of it.
+
+> ⚠️ **07d partly invalidates the verdict 07a was waiting for.** A taper in `StickPoller` was raising
+> `lean` to the power $2.2$ *before* $\omega = v/R$ ever saw it, so anyone who play-tested 07a and
+> found carving still unresponsive was reading a device-layer curve, not the carve model. **07a's
+> verdict should be re-taken now that lean is linear** — and, per 07d item 4, the low-speed
+> carve/kickturn latch is a second discontinuity 07a did not address.
 
 ## ⚠️ These are deliberate re-baselines, not no-ops
 
